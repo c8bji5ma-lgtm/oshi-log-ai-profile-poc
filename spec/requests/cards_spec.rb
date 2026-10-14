@@ -1,0 +1,456 @@
+require "rails_helper"
+require "tmpdir"
+require_relative "../support/image_attachments"
+
+RSpec.describe "Photo cards", type: :request do
+  include ImageAttachments
+  include ActiveSupport::Testing::TimeHelpers
+
+  let(:user) { create(:user) }
+  let(:profile) { create(:profile, user: user) }
+  let(:user_oshi) { create(:user_oshi, user: user) }
+
+  around do |example|
+    previous_registry = ActiveStorage::Blob.services
+    previous_service = ActiveStorage::Blob.service
+    Dir.mktmpdir("oshilog-card-spec-") do |directory|
+      storage = ActiveStorage::Service::DiskService.new(root: directory)
+      storage.name = "test"
+      ActiveStorage::Blob.services = { "test" => storage }
+      ActiveStorage::Blob.service = storage
+      example.run
+    ensure
+      ActiveStorage::Blob.services = previous_registry
+      ActiveStorage::Blob.service = previous_service
+    end
+  end
+
+  def login(account = user)
+    post user_session_path, params: { user: { email: account.email, password: "password123" } }
+  end
+
+  def generate_card(ids = user_oshi.id, **settings)
+    ids = Array(ids).map(&:to_s)
+    post card_path, params: { card: { user_oshi_ids: ids, image_user_oshi_ids: ids,
+      show_introduction: true }.merge(settings) }, as: :json
+  end
+
+  def attach_color(record, color)
+    bytes = Vips::Image.black(8, 10, bands: 3).new_from_image(color).copy(interpretation: :srgb)
+      .write_to_buffer(".png")
+    record.representative_image.attach(io: StringIO.new(bytes), filename: "color.png", content_type: "image/png")
+  end
+
+  def save_card(png, receipt)
+    post download_card_path, params: png, headers: { "CONTENT_TYPE" => "image/png", "X-Card-Receipt" => receipt }
+  end
+
+  it "requires login for the page, generation and download" do
+    get new_card_path
+    expect(response).to redirect_to(new_user_session_path)
+    generate_card
+    expect(response).to have_http_status(:unauthorized)
+    save_card("png", "receipt")
+    expect(response).to have_http_status(:unauthorized)
+  end
+
+  it "requires an explicitly saved Profile" do
+    login
+    get new_card_path
+    expect(response).to redirect_to(edit_profile_path)
+    expect(user.reload.profile).to be_nil
+    generate_card
+    expect(response).to have_http_status(:unprocessable_content)
+  end
+
+  it "shows only this user's registered oshis and disables Turbo snapshots" do
+    profile
+    user_oshi
+    foreign = create(:user_oshi)
+    login
+    get new_card_path
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to include(user_oshi.oshi.name, 'name="turbo-cache-control" content="no-cache"')
+    expect(response.body).not_to include(foreign.oshi.name)
+  end
+
+  it "generates a real PNG, reads no Activity and does not persist card data" do
+    profile
+    user_oshi.representative_image.attach(image_upload)
+    login
+    original_profile = profile.reload.attributes
+    original_metadata = user_oshi.representative_image.blob.reload.attributes
+    original_bytes = user_oshi.representative_image.download
+    queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| queries << payload[:sql] }
+    counts = [ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+    generate_card
+    ActiveSupport::Notifications.unsubscribe(subscription)
+    expect(response).to have_http_status(:ok)
+    expect(response.media_type).to eq("image/png")
+    expect(response.headers["Cache-Control"]).to include("private", "no-store")
+    image = Vips::Image.new_from_buffer(response.body, "")
+    expect([ image.width, image.height ]).to eq([ 1600, 1000 ])
+    expect(queries.join).not_to match(/\b(?:activities|activity_oshis|subscriptions)\b/i)
+    expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+    expect(profile.reload.attributes).to eq(original_profile)
+    expect(user_oshi.representative_image.blob.reload.attributes).to eq(original_metadata)
+    expect(user_oshi.representative_image.download).to eq(original_bytes)
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  it "generates when no image is registered, while preserving the Oshi name" do
+    profile
+    login
+    generate_card
+    expect(response).to have_http_status(:ok)
+    expect(Vips::Image.new_from_buffer(response.body, "").width).to eq(1600)
+  end
+
+  %w[image.jpg image.webp].each do |filename|
+    it "generates from a registered static #{File.extname(filename)} image" do
+      profile
+      user_oshi.representative_image.attach(image_upload(filename))
+      login
+      generate_card
+      expect(response).to have_http_status(:ok)
+      image = Vips::Image.new_from_buffer(response.body, "")
+      expect([ image.width, image.height ]).to eq([ 1600, 1000 ])
+    end
+  end
+
+  it "rejects a MIME type that disagrees with the actual image format" do
+    profile
+    blob = ActiveStorage::Blob.create_and_upload!(**image_upload,
+      content_type: "image/jpeg", identify: false)
+    user_oshi.representative_image.attach(blob)
+    login
+    generate_card
+    expect(response).to have_http_status(:unprocessable_content)
+    expect(user_oshi.reload.representative_image.blob.id).to eq(blob.id)
+  end
+
+  it "accepts rejected or ended registered oshis without Activity" do
+    profile
+    user_oshi.update!(ended_period: "2024")
+    user_oshi.oshi.update!(status: :rejected)
+    login
+    generate_card
+    expect(response).to have_http_status(:ok)
+  end
+
+  it "rejects a different user's UserOshi" do
+    profile
+    login
+    generate_card(create(:user_oshi).id)
+    expect(response).to have_http_status(:not_found)
+    expect(response.media_type).to eq("application/json")
+  end
+
+  it "rejects a mixed selection containing another user's UserOshi even with its image off" do
+    profile
+    foreign = create(:user_oshi)
+    login
+    generate_card([ user_oshi.id, foreign.id ], image_user_oshi_ids: [ user_oshi.id.to_s, "" ])
+    expect(response).to have_http_status(:not_found)
+    expect(response.headers["X-Card-Receipt"]).to be_nil
+  end
+
+  it "rejects scalar, empty, duplicate, excessive and malformed selection arrays" do
+    profile
+    login
+    id = user_oshi.id.to_s
+    [ id, [], [ id, id ], [ id ] * 5, [ "1abc" ], [ "0" ], [ "9" * 20 ], [ user_oshi.id ] ].each do |ids|
+      post card_path, params: { card: { user_oshi_ids: ids, image_user_oshi_ids: [ id ], show_introduction: true } }, as: :json
+      expect(response).to have_http_status(:unprocessable_content)
+    end
+  end
+
+  it "reports missing originals instead of returning a placeholder PNG" do
+    profile
+    user_oshi.representative_image.attach(image_upload)
+    user_oshi.representative_image.blob.service.delete(user_oshi.representative_image.blob.key)
+    login
+    generate_card
+    expect(response).to have_http_status(:unprocessable_content)
+    expect(response.parsed_body["error"]).to include("未登録とは異なる")
+  end
+
+  it "rejects changed image bytes and leaves the attachment intact" do
+    profile
+    user_oshi.representative_image.attach(image_upload)
+    blob = user_oshi.representative_image.blob
+    File.binwrite(blob.service.path_for(blob.key), "broken")
+    login
+    generate_card
+    expect(response).to have_http_status(:unprocessable_content)
+    expect(user_oshi.reload.representative_image.blob.id).to eq(blob.id)
+  end
+
+  it "does not read an image explicitly switched off" do
+    profile
+    user_oshi.representative_image.attach(image_upload)
+    user_oshi.representative_image.blob.service.delete(user_oshi.representative_image.blob.key)
+    login
+    generate_card(user_oshi.id, image_user_oshi_ids: [ "" ])
+    expect(response).to have_http_status(:ok)
+  end
+
+  it "returns the identical preview bytes on an explicit download" do
+    profile
+    login
+    generate_card
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    save_card(png, receipt)
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to eq(png)
+    expect(response.headers["Content-Disposition"]).to include("attachment", "oshilog-card.png")
+  end
+
+  it "rejects modified PNG bytes or a forged receipt" do
+    profile
+    login
+    generate_card
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    modified = png.dup
+    modified.setbyte(modified.length - 1, modified.getbyte(modified.length - 1) ^ 1)
+    save_card(modified, receipt)
+    expect(response).to have_http_status(:unprocessable_content)
+    save_card(png, "forged")
+    expect(response).to have_http_status(:unprocessable_content)
+  end
+
+  it "rejects source changes after preview without re-rendering" do
+    profile
+    login
+    generate_card
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    user_oshi.oshi.update!(name: "変更後")
+    save_card(png, receipt)
+    expect(response).to have_http_status(:conflict)
+  end
+
+  it "rejects Profile changes made while the image is being generated" do
+    profile
+    login
+    allow_any_instance_of(Cards::Photo).to receive(:render).and_wrap_original do |render|
+      png = render.call
+      profile.update!(display_name: "生成中に変更")
+      png
+    end
+    generate_card
+    expect(response).to have_http_status(:conflict)
+    expect(response.headers["X-Card-Receipt"]).to be_nil
+  end
+
+  it "rejects expired previews and receipts reused by another account" do
+    profile
+    login
+    generate_card
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    travel 15.minutes do
+      save_card(png, receipt)
+      expect(response).to have_http_status(:gone)
+    end
+    delete destroy_user_session_path
+    login(create(:user))
+    save_card(png, receipt)
+    expect(response).to have_http_status(:forbidden)
+  end
+
+  it "renders saved markup as literal text and never modifies a long introduction" do
+    profile.update!(display_name: "<span>&表示名", introduction: "か\u3099👩🏽‍💻" * 400)
+    login
+    original = profile.introduction
+    generate_card
+    expect(response).to have_http_status(:ok)
+    expect(profile.reload.introduction).to eq(original)
+  end
+
+  it "rejects a receipt after logout and login as the same user" do
+    profile
+    login
+    generate_card
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    delete destroy_user_session_path
+    login
+    save_card(png, receipt)
+    expect(response).to have_http_status(:forbidden)
+  end
+
+  it "requires a valid CSRF token when forgery protection is enabled" do
+    profile
+    user_oshi
+    login
+    previous = ApplicationController.allow_forgery_protection
+    ApplicationController.allow_forgery_protection = true
+    generate_card
+    expect(response).to have_http_status(:unprocessable_content)
+    get new_card_path
+    token = Nokogiri::HTML(response.body).at_css('meta[name="csrf-token"]')["content"]
+    post card_path, params: { card: { user_oshi_ids: [ user_oshi.id.to_s ], image_user_oshi_ids: [ user_oshi.id.to_s ],
+      show_introduction: true } }, as: :json, headers: { "X-CSRF-Token" => token }
+    expect(response).to have_http_status(:ok)
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    post download_card_path, params: png, headers: { "CONTENT_TYPE" => "image/png",
+      "X-Card-Receipt" => receipt, "X-CSRF-Token" => token }
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to eq(png)
+  ensure
+    ApplicationController.allow_forgery_protection = previous
+  end
+
+  {
+    1 => { xs: [ 48 ], width: 496, height: 620 },
+    2 => { xs: [ 372, 812 ], width: 416, height: 520 },
+    3 => { xs: [ 152, 592, 1032 ], width: 416, height: 520 },
+    4 => { xs: [ 72, 440, 808, 1176 ], width: 352, height: 440 }
+  }.each do |count, layout|
+    it "renders #{count} ordered photo frames at the requested dimensions and positions" do
+      profile
+      colors = [ [ 255, 0, 0 ], [ 0, 255, 0 ], [ 0, 0, 255 ], [ 255, 255, 0 ] ].take(count)
+      records = Array.new(count) { create(:user_oshi, user: user) }
+      records.zip(colors).each { |record, color| attach_color(record, color) }
+      login
+      generate_card(records.reverse.map(&:id))
+      expect(response).to have_http_status(:ok)
+      image = Vips::Image.new_from_buffer(response.body, "")
+      expect([ image.width, image.height ]).to eq([ 1600, 1000 ])
+      layout[:xs].zip(colors.reverse).each do |x, color|
+        expect(image.getpoint(x, 176).take(3)).to eq(color)
+        expect(image.getpoint(x + layout[:width] - 1, 176 + layout[:height] - 1).take(3)).to eq(color)
+        expect(image.getpoint(x - 1, 176).take(3)).to eq([ 255, 255, 255 ])
+        expect(image.getpoint(x + layout[:width], 176).take(3)).to eq([ 255, 255, 255 ])
+        expect(image.getpoint(x, 176 + layout[:height]).take(3)).to eq([ 255, 255, 255 ])
+      end
+    end
+  end
+
+  it "shares a selected representative image across frames while preserving their names" do
+    profile
+    records = Array.new(2) { create(:user_oshi, user: user) }
+    attach_color(records[0], [ 255, 0, 0 ])
+    attach_color(records[1], [ 0, 255, 0 ])
+    login
+    generate_card(records.map(&:id))
+    original = Vips::Image.new_from_buffer(response.body, "")
+    generate_card(records.map(&:id), image_user_oshi_ids: [ records[1].id.to_s ] * 2)
+    expect(response).to have_http_status(:ok)
+    shared = Vips::Image.new_from_buffer(response.body, "")
+    [ 372, 812 ].each do |x|
+      expect(shared.getpoint(x, 176).take(3)).to eq([ 0, 255, 0 ])
+      expect(shared.crop(x, 704, 416, 80).write_to_buffer(".png"))
+        .to eq(original.crop(x, 704, 416, 80).write_to_buffer(".png"))
+    end
+  end
+
+  it "rejects image sources outside the selected set, including another user's image" do
+    profile
+    unselected = create(:user_oshi, user: user)
+    foreign = create(:user_oshi)
+    login
+    [ unselected.id.to_s, foreign.id.to_s ].each do |source|
+      generate_card(user_oshi.id, image_user_oshi_ids: [ source ])
+      expect(response).to have_http_status(:unprocessable_content)
+    end
+  end
+
+  it "rejects malformed or incomplete per-frame image settings" do
+    profile
+    login
+    [ nil, [], [ nil, nil ], [ false ], [ user_oshi.id ] ].each do |images|
+      generate_card(user_oshi.id, image_user_oshi_ids: images)
+      expect(response).to have_http_status(:unprocessable_content)
+    end
+  end
+
+  it "keeps missing and switched-off image slots while reading only the enabled source" do
+    profile
+    records = Array.new(3) { create(:user_oshi, user: user) }
+    attach_color(records[1], [ 0, 255, 0 ])
+    records[1].representative_image.blob.service.delete(records[1].representative_image.blob.key)
+    attach_color(records[2], [ 0, 0, 255 ])
+    login
+    generate_card(records.map(&:id), image_user_oshi_ids: [ records[0].id.to_s, "", records[2].id.to_s ])
+    expect(response).to have_http_status(:ok)
+    image = Vips::Image.new_from_buffer(response.body, "")
+    [ 152, 592 ].each { |x| expect(image.getpoint(x, 176).take(3)).to eq([ 240, 243, 246 ]) }
+    expect(image.getpoint(1032, 176).take(3)).to eq([ 0, 0, 255 ])
+  end
+
+  it "refuses the whole card if any enabled original cannot be retrieved" do
+    profile
+    records = Array.new(2) { create(:user_oshi, user: user) }
+    records.each { |record| record.representative_image.attach(image_upload) }
+    records.last.representative_image.blob.service.delete(records.last.representative_image.blob.key)
+    login
+    generate_card(records.map(&:id))
+    expect(response).to have_http_status(:unprocessable_content)
+    expect(response.media_type).to eq("application/json")
+    expect(response.headers["X-Card-Receipt"]).to be_nil
+  end
+
+  it "generates a four-person card with placeholders when no images are registered" do
+    profile
+    records = Array.new(4) { create(:user_oshi, user: user) }
+    login
+    generate_card(records.map(&:id))
+    expect(response).to have_http_status(:ok)
+    image = Vips::Image.new_from_buffer(response.body, "")
+    [ 72, 440, 808, 1176 ].each do |x|
+      expect(image.getpoint(x, 176).take(3)).to eq([ 240, 243, 246 ])
+    end
+  end
+
+  it "rechecks all selected names and used originals before returning the identical multi-person PNG" do
+    profile
+    records = Array.new(4) { create(:user_oshi, user: user) }
+    records.each { |record| record.representative_image.attach(image_upload) }
+    login
+    generate_card(records.map(&:id))
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    save_card(png, receipt)
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to eq(png)
+    records.last.oshi.update!(name: "最後の推しの変更")
+    save_card(png, receipt)
+    expect(response).to have_http_status(:conflict)
+    generate_card(records.map(&:id))
+    png = response.body.dup
+    receipt = response.headers["X-Card-Receipt"]
+    records.last.representative_image.attach(image_upload("image.jpg"))
+    save_card(png, receipt)
+    expect(response).to have_http_status(:conflict)
+  end
+
+  it "reads no Activity or year data and does not persist or modify sources for four people" do
+    profile
+    records = Array.new(4) { create(:user_oshi, user: user) }
+    records.each { |record| record.representative_image.attach(image_upload) }
+    before = records.map { |record| [ record.reload.attributes, record.representative_image.blob.reload.attributes,
+      record.representative_image.download ] }
+    original_profile = profile.reload.attributes
+    counts = [ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+    queries = []
+    login
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| queries << payload[:sql] }
+    generate_card(records.map(&:id))
+    ActiveSupport::Notifications.unsubscribe(subscription)
+    expect(response).to have_http_status(:ok)
+    expect(queries.join).not_to match(/\b(?:activities|activity_oshis|subscriptions)\b/i)
+    expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+    expect(profile.reload.attributes).to eq(original_profile)
+    expect(records.map { |record| [ record.reload.attributes, record.representative_image.blob.reload.attributes,
+      record.representative_image.download ] }).to eq(before)
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+end

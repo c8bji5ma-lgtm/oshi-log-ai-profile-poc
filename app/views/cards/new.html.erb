@@ -1,0 +1,53 @@
+<% content_for :title, "推し活カード作成 | OshiLog" %>
+<% content_for :head do %>
+  <meta name="turbo-cache-control" content="no-cache">
+<% end %>
+
+<h1>推し活カード作成</h1>
+<p>写真中心・推し1〜4人のカードです。作成した画像はこのページを離れると破棄されます。</p>
+<% if @user_oshis.empty? %>
+  <section class="card">
+    <p>まず推しを登録してください。</p>
+    <%= link_to "推しを登録", new_oshi_path, class: "button" %>
+  </section>
+<% else %>
+  <div data-controller="photo-card"
+       data-photo-card-create-url-value="<%= card_path %>"
+       data-photo-card-download-url-value="<%= download_card_path %>"
+       data-action="turbo:before-cache@document->photo-card#dispose pagehide@window->photo-card#dispose">
+    <section class="card">
+      <form data-action="submit->photo-card#generate change->photo-card#changed" data-photo-card-target="form">
+        <fieldset class="photo-card-choices">
+          <legend>推しを1〜4人選択</legend>
+          <% @user_oshis.each_with_index do |user_oshi, index| %>
+            <label>
+              <input type="checkbox" name="user_oshi_ids[]" value="<%= user_oshi.id %>"
+                     data-photo-card-target="oshi" data-name="<%= user_oshi.oshi.name %>"
+                     data-action="change->photo-card#selectOshi" <%= "checked" if index.zero? %>>
+              <%= user_oshi.oshi.name %>
+            </label>
+          <% end %>
+        </fieldset>
+        <p>選んだ順に左から配置します。解除して選び直すと順番を変更できます。</p>
+        <div class="photo-card-frame-settings" data-photo-card-target="frames"></div>
+        <template data-photo-card-target="frameTemplate">
+          <div class="form-field">
+            <label data-frame-label></label>
+            <select data-frame-source></select>
+          </div>
+        </template>
+        <p><label><input type="checkbox" name="show_introduction" checked> 保存済みの自己紹介を表示する</label></p>
+        <p>各枠には、選択中の推しの代表画像を使えます。画像未登録でも作成できます。画像は枠の中央に合わせて表示します。</p>
+        <button type="submit" class="button" data-photo-card-target="generateButton">プレビューを作成</button>
+      </form>
+      <p role="status" aria-live="polite" data-photo-card-target="status"></p>
+      <p role="alert" data-photo-card-target="error"></p>
+    </section>
+    <section class="card" data-photo-card-target="preview" hidden>
+      <h2>完成プレビュー</h2>
+      <img class="photo-card-preview" data-photo-card-target="image" alt="生成した推し活カード">
+      <p>プレビューの有効期限は生成成功から15分です。</p>
+      <button type="button" class="button" data-photo-card-target="downloadButton" data-action="photo-card#download">PNGをダウンロード</button>
+    </section>
+  </div>
+<% end %>

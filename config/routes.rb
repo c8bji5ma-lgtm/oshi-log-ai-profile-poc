@@ -16,6 +16,9 @@ Rails.application.routes.draw do
   resources :subscriptions, only: [ :index, :new, :create, :edit, :update, :destroy ]
   get "data", to: "oshi_data#show", as: :oshi_data
   resource :profile, only: [ :edit, :update ]
+  resource :card, only: [ :new, :create ] do
+    post :download
+  end
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.

@@ -1,0 +1,31 @@
+.photo-card-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 1rem;
+}
+
+.photo-card-choices {
+  display: grid;
+  gap: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.photo-card-frame-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.photo-card-frame-settings select {
+  width: 100%;
+}
+
+[data-controller="photo-card"] [role="alert"] {
+  color: #9b2226;
+}
+
+[data-controller="photo-card"] button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}

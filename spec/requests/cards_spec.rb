@@ -105,7 +105,45 @@ RSpec.describe "Photo cards", type: :request do
     login
     generate_card
     expect(response).to have_http_status(:ok)
-    expect(Vips::Image.new_from_buffer(response.body, "").width).to eq(1600)
+    image = Vips::Image.new_from_buffer(response.body, "")
+    expect(image.width).to eq(1600)
+    # Inspect the broad text area, without matching individual glyphs or a stored bitmap.
+    name_area = image.crop(568, 176, 984, 132)
+    expect(name_area.min).to be < 255
+    user_oshi.oshi.update!(name: "名前を変更した推し")
+    generate_card
+    expect(response).to have_http_status(:ok)
+    updated = Vips::Image.new_from_buffer(response.body, "")
+    expect(updated.crop(568, 176, 984, 132).write_to_buffer(".png"))
+      .not_to eq(name_area.write_to_buffer(".png"))
+  end
+
+  it "omits the introduction from the PNG when show_introduction is false without modifying saved text" do
+    profile.update!(introduction: "ライブと舞台を楽しんでいます。")
+    login
+    generate_card(show_introduction: true)
+    expect(response).to have_http_status(:ok)
+    shown = Vips::Image.new_from_buffer(response.body, "")
+    generate_card(show_introduction: false)
+    expect(response).to have_http_status(:ok)
+    hidden = Vips::Image.new_from_buffer(response.body, "")
+    # The lower card area contains only the optional introduction, below the photo and name.
+    expect(shown.crop(0, 800, shown.width, shown.height - 800).min).to be < 255
+    expect(hidden.crop(0, 800, hidden.width, hidden.height - 800).min).to eq(255)
+    expect(profile.reload.introduction).to eq("ライブと舞台を楽しんでいます。")
+  end
+
+  it "returns JSON 503 without a preview receipt when the rendering font is unavailable" do
+    profile
+    login
+    allow(File).to receive(:file?).and_call_original
+    allow(File).to receive(:file?).with(Cards::Photo::FONT_FILE).and_return(false)
+    generate_card
+    expect(response).to have_http_status(:service_unavailable)
+    expect(response.media_type).to eq("application/json")
+    expect(response.parsed_body).to eq("error" => "描画用フォントを利用できません。")
+    expect(response.headers["X-Card-Receipt"]).to be_nil
+    expect(response.headers["Cache-Control"]).to include("private", "no-store")
   end
 
   %w[image.jpg image.webp].each do |filename|
@@ -269,6 +307,16 @@ RSpec.describe "Photo cards", type: :request do
     original = profile.introduction
     generate_card
     expect(response).to have_http_status(:ok)
+    image = Vips::Image.new_from_buffer(response.body, "")
+    name_area = image.crop(48, 48, 1200, 64)
+    expect(name_area.min).to be < 255
+    expect(image.crop(0, 800, image.width, image.height - 800).min).to be < 255
+    profile.update!(display_name: "変更した表示名")
+    generate_card
+    expect(response).to have_http_status(:ok)
+    updated = Vips::Image.new_from_buffer(response.body, "")
+    expect(updated.crop(48, 48, 1200, 64).write_to_buffer(".png"))
+      .not_to eq(name_area.write_to_buffer(".png"))
     expect(profile.reload.introduction).to eq(original)
   end
 
@@ -346,6 +394,7 @@ RSpec.describe "Photo cards", type: :request do
     shared = Vips::Image.new_from_buffer(response.body, "")
     [ 372, 812 ].each do |x|
       expect(shared.getpoint(x, 176).take(3)).to eq([ 0, 255, 0 ])
+      expect(shared.crop(x, 704, 416, 80).min).to be < 255
       expect(shared.crop(x, 704, 416, 80).write_to_buffer(".png"))
         .to eq(original.crop(x, 704, 416, 80).write_to_buffer(".png"))
     end

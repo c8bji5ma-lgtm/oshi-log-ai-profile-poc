@@ -102,8 +102,66 @@ jobs:
       - name: Apply test database migrations
         run: bin/rails db:migrate
 
+      - name: Set up Chrome and ChromeDriver
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+          install-dependencies: true
+
+      - name: Diagnose Chrome startup
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          SE_CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+        run: |
+          mkdir -p tmp/chrome-diagnostics
+          cat /etc/os-release
+          id
+          df -h /dev/shm
+          "$CHROME_BIN" --version
+          "$SE_CHROMEDRIVER" --version
+          for setting in /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/kernel/unprivileged_userns_clone; do
+            if [ -r "$setting" ]; then
+              printf '%s=' "$setting"
+              cat "$setting"
+            fi
+          done
+          ldd "$CHROME_BIN" > tmp/chrome-diagnostics/libraries.log
+          if grep -F 'not found' tmp/chrome-diagnostics/libraries.log; then
+            exit 1
+          fi
+          profile_root="$(mktemp -d)"
+          trap 'rm -rf "$profile_root"' EXIT
+          if timeout --kill-after=5s 20s "$CHROME_BIN" --headless --disable-search-engine-choice-screen --user-data-dir="$profile_root/sandbox" --dump-dom about:blank > tmp/chrome-diagnostics/sandbox.html 2> tmp/chrome-diagnostics/sandbox.log; then
+            echo 'Chrome starts with the default sandbox.'
+          else
+            echo "Default sandbox probe exited with status $?; stderr follows:"
+            tail -n 40 tmp/chrome-diagnostics/sandbox.log
+          fi
+          if timeout --kill-after=5s 20s "$CHROME_BIN" --headless --no-sandbox --disable-search-engine-choice-screen --user-data-dir="$profile_root/ci" --dump-dom about:blank > tmp/chrome-diagnostics/startup.html 2> tmp/chrome-diagnostics/startup.log; then
+            grep -F '<html>' tmp/chrome-diagnostics/startup.html
+          else
+            chrome_exit_status=$?
+            tail -n 40 tmp/chrome-diagnostics/startup.log
+            exit "$chrome_exit_status"
+          fi
+
       - name: Check Rails autoloading
         run: bin/rails zeitwerk:check
 
       - name: Run RSpec
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          SE_CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+          CHROME_LOG_FILE: ${{ github.workspace }}/tmp/chrome-diagnostics/chrome.log
         run: bundle exec rspec
+
+      - name: Upload Chrome diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chrome-diagnostics
+          path: tmp/chrome-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore

@@ -33,6 +33,27 @@ RSpec.describe "Activities", type: :request do
     document.css(".activity-list a").map(&:text)
   end
 
+  describe "invalid activity parameter groups" do
+    [ {}, { activity: nil }, { activity: {} }, { activity: "invalid" },
+      { activity: [ "invalid" ] }, { activity: false } ].each do |parameters|
+      it "returns 400 on create and update for #{parameters.inspect} without changing records or links" do
+        activity = activity_for
+        original = activity.attributes
+        links = activity.activity_oshis.order(:id).pluck(:id, :oshi_id)
+        counts = [ Activity.count, ActivityOshi.count ]
+
+        post activities_path, params: parameters, as: :json
+        expect(response).to have_http_status(:bad_request)
+        expect([ Activity.count, ActivityOshi.count ]).to eq(counts)
+        patch activity_path(activity), params: parameters, as: :json
+        expect(response).to have_http_status(:bad_request)
+        expect(activity.reload.attributes).to eq(original)
+        expect(activity.activity_oshis.order(:id).pluck(:id, :oshi_id)).to eq(links)
+        expect([ Activity.count, ActivityOshi.count ]).to eq(counts)
+      end
+    end
+  end
+
   describe "index" do
     it "requires login" do
       delete destroy_user_session_path

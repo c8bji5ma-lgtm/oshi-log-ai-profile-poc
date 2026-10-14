@@ -11,6 +11,18 @@ Rails.application.routes.draw do
   get "oshis", to: "user_oshis#index", as: :oshis
   resources :oshis, only: [ :new, :create ]
   resources :user_oshis, only: [ :create, :show, :edit, :update ]
+  namespace :admin do
+    resources :oshis, only: :index do
+      collection do
+        get :new_merge
+        post :merge
+      end
+      member do
+        patch :approve
+        patch :reject
+      end
+    end
+  end
   resources :activities
   get "images/:id", to: "images#show", as: :protected_image
   resources :subscriptions, only: [ :index, :new, :create, :edit, :update, :destroy ]

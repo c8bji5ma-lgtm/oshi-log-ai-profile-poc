@@ -29,6 +29,8 @@ class UserOshisController < ApplicationController
     end
   rescue ActiveRecord::RecordNotUnique
     redirect_duplicate
+  rescue ActiveRecord::RecordNotFound => error
+    render_user_data_not_found(error)
   end
 
   def update
@@ -51,6 +53,8 @@ class UserOshisController < ApplicationController
     def set_user_oshi
       @user_oshi = current_user.user_oshis.find(params[:id])
       @representative_image = @user_oshi.representative_image.attachment
+    rescue ActiveRecord::RecordNotFound => error
+      render_user_data_not_found(error)
     end
 
     def started_period_params

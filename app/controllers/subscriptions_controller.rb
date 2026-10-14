@@ -47,6 +47,8 @@ class SubscriptionsController < ApplicationController
 
     def set_subscription
       @subscription = current_user.subscriptions.find(params[:id])
+    rescue ActiveRecord::RecordNotFound => error
+      render_user_data_not_found(error)
     end
 
     def set_selectable_oshis

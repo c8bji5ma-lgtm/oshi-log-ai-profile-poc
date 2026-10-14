@@ -93,6 +93,8 @@ class ActivitiesController < ApplicationController
     def set_activity
       @activity = current_user.activities.with_attached_images.find(params[:id])
       @existing_images = @activity.images.attachments.to_a
+    rescue ActiveRecord::RecordNotFound => error
+      render_user_data_not_found(error)
     end
 
     def set_selectable_oshis

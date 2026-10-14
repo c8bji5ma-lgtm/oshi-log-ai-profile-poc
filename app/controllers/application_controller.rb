@@ -9,6 +9,16 @@ class ApplicationController < ActionController::Base
 
   protected
 
+  def html_navigation_request?
+    request.format.html? || request.format.turbo_stream?
+  end
+
+  def render_user_data_not_found(error)
+    raise error unless html_navigation_request?
+
+    render "errors/not_found", formats: [ :html ], status: :not_found
+  end
+
   def after_sign_out_path_for(_resource_or_scope)
     new_user_session_path
   end

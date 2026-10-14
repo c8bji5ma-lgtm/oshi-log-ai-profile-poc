@@ -44,7 +44,13 @@ module Admin
     private
 
       def require_admin!
-        render plain: "管理者権限が必要です。", status: :forbidden unless current_user.admin?
+        return if current_user.admin?
+
+        if html_navigation_request?
+          render "errors/forbidden", formats: [ :html ], status: :forbidden
+        else
+          render plain: "管理者権限が必要です。", status: :forbidden
+        end
       end
 
       def update_status(status, notice)

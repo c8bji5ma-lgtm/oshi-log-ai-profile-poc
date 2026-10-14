@@ -1,0 +1,22 @@
+<% content_for :title, "推し承認管理 | OshiLog" %>
+<h1>推し承認管理</h1>
+<p>承認待ちの推しを確認し、承認または却下してください。</p>
+<p><%= link_to "重複した推しを統合", new_merge_admin_oshis_path, class: "button button-secondary" %></p>
+<% if @oshis.empty? %>
+  <p>承認待ちの推しはありません。</p>
+<% else %>
+  <div class="cards">
+    <% @oshis.each do |oshi| %>
+      <section class="card">
+        <h2><%= oshi.name %></h2>
+        <p>種別：<%= oshi.oshi_type %></p>
+        <p>所属：<%= oshi.affiliation.presence || "未設定" %></p>
+        <div class="actions">
+          <%= button_to "承認", approve_admin_oshi_path(oshi), method: :patch, class: "button", aria: { label: "#{oshi.name}を承認" } %>
+          <%= button_to "却下", reject_admin_oshi_path(oshi), method: :patch, class: "button button-secondary", aria: { label: "#{oshi.name}を却下" } %>
+        </div>
+      </section>
+    <% end %>
+  </div>
+<% end %>
+<p><%= link_to "マイページへ戻る", my_page_path %></p>

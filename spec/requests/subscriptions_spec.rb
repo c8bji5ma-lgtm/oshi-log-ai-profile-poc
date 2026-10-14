@@ -32,6 +32,25 @@ RSpec.describe "Subscription management", type: :request do
   context "when signed in" do
     before { login }
 
+    [ {}, { subscription: nil }, { subscription: {} }, { subscription: "invalid" },
+      { subscription: [ "invalid" ] }, { subscription: false } ].each do |parameters|
+      it "returns 400 on create and update for #{parameters.inspect} without changing records or links" do
+        record.update!(oshis: [ owned_oshi ])
+        original = record.attributes
+        links = record.subscription_oshis.order(:id).pluck(:id, :oshi_id)
+        counts = [ Subscription.count, SubscriptionOshi.count ]
+
+        post subscriptions_path, params: parameters, as: :json
+        expect(response).to have_http_status(:bad_request)
+        expect([ Subscription.count, SubscriptionOshi.count ]).to eq(counts)
+        patch subscription_path(record), params: parameters, as: :json
+        expect(response).to have_http_status(:bad_request)
+        expect(record.reload.attributes).to eq(original)
+        expect(record.subscription_oshis.order(:id).pluck(:id, :oshi_id)).to eq(links)
+        expect([ Subscription.count, SubscriptionOshi.count ]).to eq(counts)
+      end
+    end
+
     it "lists every owned contract in descending creation and ID order with actions and status" do
       travel_to(Time.zone.local(2026, 10, 6, 12)) do
         oshi = owned_oshi

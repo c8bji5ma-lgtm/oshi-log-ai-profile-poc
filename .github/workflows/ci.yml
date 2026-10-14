@@ -102,8 +102,18 @@ jobs:
       - name: Apply test database migrations
         run: bin/rails db:migrate
 
+      - name: Set up Chrome and ChromeDriver
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
       - name: Check Rails autoloading
         run: bin/rails zeitwerk:check
 
       - name: Run RSpec
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          SE_CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
         run: bundle exec rspec

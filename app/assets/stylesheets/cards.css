@@ -166,3 +166,13 @@ html:has(.image-crop-dialog[open]) {
   min-height: 44px;
   font: inherit;
 }
+
+.data-card-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 1rem;
+}
+
+.data-card-settings .form-field {
+  min-width: 0;
+}

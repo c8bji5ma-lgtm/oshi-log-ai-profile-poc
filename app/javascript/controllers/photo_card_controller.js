@@ -2,12 +2,13 @@ import { Controller } from "@hotwired/stimulus"
 import { defaultCrop } from "lib/crop_geometry"
 
 export default class extends Controller {
-  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm", "cropDialog", "memoryStatus", "memoryRetry", "memoryEmpty", "memoryFrames", "memoryFrameTemplate", "memoryAdd"]
-  static values = { createUrl: String, downloadUrl: String, layouts: Object, memoriesUrl: String }
+  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm", "cropDialog", "memoryStatus", "memoryRetry", "memoryEmpty", "memoryFrames", "memoryFrameTemplate", "memoryAdd", "dataYear", "dataOshi", "dataStatus", "dataRetry"]
+  static values = { createUrl: String, downloadUrl: String, layouts: Object, memoriesUrl: String, statisticsUrl: String }
 
   connect() {
     this.sequence = (this.sequence || 0) + 1
     this.disposed = false
+    this.generating = false
     this.lastAction = Date.now()
     this.template = "photo"
     this.settingsFormTargets.forEach(form => {
@@ -20,6 +21,9 @@ export default class extends Controller {
     this.memories = null
     this.memoryIds = []
     this.memoryEdits = new Map()
+    this.dataSettings = null
+    this.dataYearTarget.disabled = true
+    this.dataOshiTarget.disabled = true
     this.renderFrames()
     this.renderPanels()
     this.timer = setInterval(() => this.checkExpiry(), 1000)
@@ -35,10 +39,9 @@ export default class extends Controller {
     this.invalidate()
     this.renderPanels()
     if (this.template === "memories" && !this.memories) this.loadMemories()
+    if (this.template === "data" && !this.dataSettings) this.loadStatistics()
     this.errorTarget.textContent = ""
-    this.statusTarget.textContent = this.template !== "data"
-      ? "テンプレートを切り替えました。プレビューを作成してください。"
-      : "テンプレートを切り替えました。このテンプレートのPNG生成は未実装です。"
+    this.statusTarget.textContent = "テンプレートを切り替えました。プレビューを作成してください。"
   }
 
   renderPanels() {
@@ -47,13 +50,56 @@ export default class extends Controller {
 
   get canGenerate() {
     return !this.disposed && (this.template === "photo" ? this.selectedIds?.length > 0 :
-      this.template === "memories" && this.memoryIds?.length > 0)
+      (this.template === "memories" ? this.memoryIds?.length > 0 : this.template === "data" && Boolean(this.dataSettings)))
   }
 
-  updateGenerateButtons(busy = false) {
+  updateGenerateButtons(busy = this.generating) {
     this.generateButtonTargets.forEach(button => {
       button.disabled = busy || !this.canGenerate || button.closest("[data-template]").dataset.template !== this.template
     })
+  }
+
+  async loadStatistics() {
+    if (this.disposed || !this.checkExpiry() || this.dataLoad || this.dataSettings) return
+    this.lastAction = Date.now()
+    const operation = new AbortController()
+    this.dataLoad = operation
+    this.dataRetryTarget.hidden = true
+    this.dataStatusTarget.textContent = "年と集計対象を読み込んでいます。"
+    try {
+      const response = await fetch(this.statisticsUrlValue, { credentials: "same-origin", signal: operation.signal,
+        headers: { Accept: "application/json" } })
+      if (!response.ok) throw new Error(await this.errorMessage(response))
+      const options = await response.json()
+      if (this.disposed || this.dataLoad !== operation || !this.checkExpiry()) return
+      this.dataYearTarget.replaceChildren(...options.years.map(year => new Option(`${year}年`, year)))
+      this.dataOshiTarget.replaceChildren(new Option("すべての推し", ""), ...options.oshis.map(oshi => new Option(oshi.name, oshi.id)))
+      this.dataSettings = { year: options.year, oshi_id: "" }
+      this.dataYearTarget.value = options.year
+      this.dataOshiTarget.value = ""
+      this.dataYearTarget.disabled = false
+      this.dataOshiTarget.disabled = false
+      this.dataStatusTarget.textContent = options.oshis.length ? "年と集計対象を選択できます。" : "推しの登録がなくても全体のカードを作成できます。"
+      this.updateGenerateButtons()
+    } catch (error) {
+      if (!this.disposed && this.dataLoad === operation && error.name !== "AbortError") {
+        this.dataStatusTarget.textContent = `選択肢を取得できません。${error.message}`
+        this.dataRetryTarget.hidden = false
+      }
+    } finally {
+      if (this.dataLoad === operation) this.dataLoad = null
+    }
+  }
+
+  changeStatistics() {
+    if (this.disposed || !this.checkExpiry() || this.template !== "data" || !this.dataSettings) return
+    this.lastAction = Date.now()
+    const next = { year: this.dataYearTarget.value, oshi_id: this.dataOshiTarget.value }
+    if (next.year === this.dataSettings.year && next.oshi_id === this.dataSettings.oshi_id) return
+    this.dataSettings = next
+    this.invalidate()
+    this.errorTarget.textContent = ""
+    this.statusTarget.textContent = "設定を変更しました。プレビューを作成してください。"
   }
 
   async loadMemories() {
@@ -342,12 +388,15 @@ export default class extends Controller {
     this.operation = operation
     this.errorTarget.textContent = ""
     this.statusTarget.textContent = "カードを作成しています。"
+    this.generating = true
     this.updateGenerateButtons(true)
     try {
       const response = await fetch(this.createUrlValue, {
         method: "POST", credentials: "same-origin", signal: operation.signal,
         headers: { "Content-Type": "application/json", "X-CSRF-Token": this.csrfToken },
-        body: JSON.stringify({ card: this.template === "memories" ? {
+        body: JSON.stringify({ card: this.template === "data" ? {
+          template: "data", ...this.dataSettings
+        } : this.template === "memories" ? {
           template: "memory", activity_ids: this.memoryIds,
           image_attachment_ids: this.memoryIds.map(id => this.memoryEdits.get(id).imageId),
           crops: this.memoryIds.map(id => this.memoryEdits.get(id).crop)
@@ -378,12 +427,15 @@ export default class extends Controller {
         this.statusTarget.textContent = ""
       }
     } finally {
-      if (this.current(sequence)) this.updateGenerateButtons()
+      if (this.current(sequence)) {
+        this.generating = false
+        this.updateGenerateButtons()
+      }
     }
   }
 
   async download() {
-    if (this.disposed || !this.checkExpiry() || this.template === "data" || !this.result) return
+    if (this.disposed || !this.checkExpiry() || !this.result) return
     this.lastAction = Date.now()
     const result = this.result
     const sequence = this.sequence
@@ -444,6 +496,7 @@ export default class extends Controller {
 
   invalidate() {
     this.sequence += 1
+    this.generating = false
     this.operation?.abort()
     if (this.url) URL.revokeObjectURL(this.url)
     this.url = null
@@ -468,6 +521,13 @@ export default class extends Controller {
     this.selectedIds = []
     this.imageSources?.clear()
     this.crops?.clear()
+    this.dataLoad?.abort()
+    this.dataLoad = null
+    this.dataSettings = null
+    this.dataYearTarget.replaceChildren()
+    this.dataOshiTarget.replaceChildren()
+    this.dataRetryTarget.hidden = true
+    this.dataStatusTarget.textContent = ""
     this.memoryLoad?.abort()
     this.memoryLoad = null
     this.memories = null

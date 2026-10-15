@@ -76,7 +76,7 @@ RSpec.describe "Photo cards", type: :request do
     expect(response.body).not_to include(foreign.oshi.name)
   end
 
-  it "shows all template choices with photo selected and pending generators disabled without persisting settings" do
+  it "shows all template choices with photo selected and all settings available without persisting settings" do
     profile
     user_oshi
     login
@@ -88,13 +88,13 @@ RSpec.describe "Photo cards", type: :request do
     expect(radios.map { |input| input["value"] }).to eq(%w[photo memories data])
     expect(radios.select { |input| input.key?("checked") }.map { |input| input["value"] }).to eq([ "photo" ])
     expect(document.at_css("#card-settings-photo").key?("hidden")).to be(false)
-    %w[data].each do |template|
-      panel = document.at_css("#card-settings-#{template}")
-      expect(panel.key?("hidden")).to be(true)
-      expect(panel.text).to include("PNG生成は未実装")
-      expect(panel.at_css("button[type='submit']").key?("disabled")).to be(true)
-      expect(panel.at_css("input[name='show_introduction']")).to be_present
-    end
+    data = document.at_css("#card-settings-data")
+    expect(data.key?("hidden")).to be(true)
+    expect(data.text).not_to include("PNG生成は未実装")
+    expect(data.at_css("button[type='submit']").key?("disabled")).to be(true)
+    expect(data.at_css("input[name='show_introduction']")).to be_nil
+    expect(data.at_css("select#card-data-year")).to be_present
+    expect(data.at_css("select#card-data-oshi")).to be_present
     memory = document.at_css("#card-settings-memories")
     expect(memory.key?("hidden")).to be(true)
     expect(memory.text).to include("活動を1〜3件")
@@ -135,7 +135,7 @@ RSpec.describe "Photo cards", type: :request do
     expect(response.body).to eq(png)
   end
 
-  [ "data", "unknown", nil, [ "photo" ], { name: "photo" } ].each do |template|
+  [ "unknown", nil, [ "photo" ], { name: "photo" } ].each do |template|
     it "rejects unsupported template #{template.inspect} without rendering or persisting" do
       profile
       login
@@ -144,7 +144,7 @@ RSpec.describe "Photo cards", type: :request do
       generate_card(template: template)
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.media_type).to eq("application/json")
-      expect(response.parsed_body["error"]).to include("PNG生成は未実装")
+      expect(response.parsed_body["error"]).to include("利用できません")
       expect(response.headers["X-Card-Receipt"]).to be_nil
       expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
     end

@@ -445,8 +445,9 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "データ可視化重視", exact: true
     expect(page).not_to have_css("#card-settings-photo, #card-settings-memories")
     within("#card-settings-data") do
-      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
-      expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
+      expect(page).to have_select("集計対象", selected: "すべての推し")
+      select second.oshi.name, from: "集計対象"
+      expect(page).to have_button("プレビューを作成", disabled: false)
     end
     choose "思い出・活動履歴重視", exact: true
     within("#card-settings-memories") { expect(page).not_to have_select("1. 掲載する活動") }
@@ -461,25 +462,27 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     download_png
   end
 
-  it "never sends a generation request from pending templates, including a submitted form" do
+  it "never generates a data card while its options are unavailable, including a submitted form" do
     create(:profile, user: user)
     sign_in
     open_card
     page.execute_script(<<~JS)
       window.cardRequests = 0;
       const originalFetch = window.fetch.bind(window);
-      window.fetch = (...args) => { window.cardRequests += 1; return originalFetch(...args); };
+      window.fetch = (...args) => {
+        if (args[0] === #{statistics_card_path.to_json}) return Promise.reject(new TypeError('offline'));
+        if (args[0] === #{card_path.to_json}) window.cardRequests += 1;
+        return originalFetch(...args);
+      };
     JS
-    [ "データ可視化重視" ].each do |name|
-      choose name, exact: true
-      within("[data-photo-card-target='panel']:not([hidden])") do
-        expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
-        find("form").execute_script("this.requestSubmit()")
-      end
-      check_invalidated_preview
-      expect(page).to have_css("[role='status']", text: "PNG生成は未実装")
-      expect(page.evaluate_script("window.cardRequests")).to eq(0)
+    choose "データ可視化重視", exact: true
+    within("#card-settings-data") do
+      expect(page).to have_text("選択肢を取得できません")
+      expect(page).to have_button("プレビューを作成", disabled: true)
+      find("form").execute_script("this.requestSubmit()")
     end
+    check_invalidated_preview
+    expect(page.evaluate_script("window.cardRequests")).to eq(0)
     expect(@download_directory.children).to be_empty
   end
 
@@ -493,7 +496,8 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     expect(page).to have_link("推しを登録")
     expect(page).to have_button("プレビューを作成", disabled: true)
     choose "データ可視化重視", exact: true
-    expect(page).to have_css("#card-settings-data", text: "PNG生成は未実装")
+    expect(page).to have_select("集計対象", options: [ "すべての推し" ])
+    expect(page).to have_button("プレビューを作成", disabled: false)
     choose "思い出・活動履歴重視", exact: true
     expect(page).to have_css("#card-settings-memories", text: "掲載できる活動記録がありません")
     choose "ビジュアル重視", exact: true
@@ -513,7 +517,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "思い出・活動履歴重視", exact: true
     expect(page).not_to have_field("保存済みの自己紹介を表示する")
     choose "データ可視化重視", exact: true
-    uncheck "保存済みの自己紹介を表示する"
+    select user_oshi.oshi.name, from: "集計対象"
     open_card
     expect(page).to have_checked_field("ビジュアル重視", exact: true)
     expect(page).to have_checked_field("保存済みの自己紹介を表示する")
@@ -522,7 +526,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     expect(page).to have_text("掲載できる活動記録がありません")
     expect(page).not_to have_field("保存済みの自己紹介を表示する")
     choose "データ可視化重視", exact: true
-    expect(page).to have_checked_field("保存済みの自己紹介を表示する")
+    expect(page).to have_select("集計対象", selected: "すべての推し")
     expect(profile.reload.attributes).to eq(original)
   end
 
@@ -549,16 +553,18 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "思い出・活動履歴重視", exact: true
     expect(page).to have_select("1. 掲載する活動", selected: memory_choice(memory))
     choose "データ可視化重視", exact: true
-    uncheck "保存済みの自己紹介を表示する"
+    select user_oshi.oshi.name, from: "集計対象"
     page.execute_script("const originalNow = Date.now; Date.now = () => originalNow() + 30 * 60 * 1000;")
     expect(page).to have_css("[role='status']", text: "30分間操作がなかったため破棄しました。ページを開き直してください。", wait: 5)
     check_invalidated_preview
     expect(page).to have_checked_field("ビジュアル重視", disabled: true, exact: true)
     expect(page).to have_button("プレビューを作成", disabled: true)
     expect(page).not_to have_css("[data-frame-source]", visible: :all)
-    expect(page.all("input[name='show_introduction']", visible: :all).map(&:checked?)).to eq([ true, true ])
-    expect(page.all("input[name='show_introduction']", visible: :all).map(&:disabled?)).to eq([ true, true ])
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:checked?)).to eq([ true ])
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:disabled?)).to eq([ true ])
     expect(page).to have_css("[data-photo-card-target='memoryFrames']:empty", visible: :all)
+    expect(page).to have_select("対象年", options: [], disabled: true, visible: :all)
+    expect(page).to have_select("集計対象", options: [], disabled: true, visible: :all)
     open_card
     expect(page).to have_checked_field("ビジュアル重視", disabled: false, exact: true)
     expect(page).to have_button("プレビューを作成", disabled: false)
@@ -936,5 +942,152 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "思い出・活動履歴重視", exact: true
     check_invalidated_preview
     generate_preview
+  end
+
+  it "selects the current data year and all oshis, includes ended registrations, and restores data settings independently" do
+    create(:profile, user: user)
+    ended = create(:user_oshi, user: user, ended_period: "2025")
+    current_year = Date.current.year
+    past_year = (current_year - 1).to_s
+    future_year = (current_year + 1).to_s
+    create(:activity, user: user, occurred_on: Date.new(current_year - 1, 12, 31), amount: 1234)
+    create(:activity, user: user, occurred_on: Date.new(current_year + 1, 1, 1), amount: 90000)
+    current = build(:activity, :without_oshis, user: user, occurred_on: Date.current, amount: 500)
+    Activities::Save.call(activity: current, oshi_ids: [ user_oshi.oshi_id, ended.oshi_id ])
+    original = user.profile.reload.attributes
+    sign_in
+    open_card
+    choose "データ可視化重視", exact: true
+    expect(page).to have_select("対象年", selected: "#{current_year}年", options: [ "#{future_year}年", "#{current_year}年", "#{past_year}年" ])
+    expect(page).to have_select("集計対象", selected: "すべての推し", options: [ "すべての推し", user_oshi.oshi.name, ended.oshi.name ])
+    expect(page).not_to have_field("保存済みの自己紹介を表示する")
+    generate_preview
+    expected = Cards::Data.new(user: user, year: current_year.to_s, oshi_id: "").render
+    expect(preview_png).to eq(expected)
+    url = find("[data-photo-card-target='image']")["src"]
+    find("#card-data-year").execute_script("this.dispatchEvent(new Event('change',{bubbles:true}))")
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    select ended.oshi.name, from: "集計対象"
+    check_invalidated_preview
+    generate_preview
+    selected = Cards::Data.new(user: user, year: current_year.to_s, oshi_id: ended.oshi_id.to_s).render
+    expect(preview_png).to eq(selected)
+    expect(selected).not_to eq(expected)
+    select "#{past_year}年", from: "対象年"
+    generate_preview
+    choose "思い出・活動履歴重視", exact: true
+    check_invalidated_preview
+    choose "データ可視化重視", exact: true
+    expect(page).to have_select("対象年", selected: "#{past_year}年")
+    expect(page).to have_select("集計対象", selected: ended.oshi.name)
+    select "#{future_year}年", from: "対象年"
+    generate_preview
+    future = Cards::Data.new(user: user, year: future_year, oshi_id: ended.oshi_id.to_s).render
+    expect(preview_png).to eq(future)
+    download_png
+    expect(File.binread(@download_directory.join("oshilog-card.png"))).to eq(future)
+    expect(user.profile.reload.attributes).to eq(original)
+  end
+
+  it "generates a zero-data card with no oshis, retries options, retains expired settings and discards them on inactivity and navigation" do
+    user_oshi.destroy!
+    create(:profile, user: user)
+    sign_in
+    visit new_card_path
+    page.execute_script(<<~JS)
+      const original = window.fetch.bind(window); let failed = false;
+      window.fetch = (...args) => {
+        if (args[0] === #{statistics_card_path.to_json} && !failed) { failed = true; return Promise.reject(new TypeError('offline')); }
+        return original(...args);
+      };
+    JS
+    choose "データ可視化重視", exact: true
+    expect(page).to have_text("選択肢を取得できません")
+    click_button "選択肢を再読み込み"
+    expect(page).to have_select("対象年", selected: "#{Date.current.year}年")
+    expect(page).to have_select("集計対象", options: [ "すべての推し" ])
+    generate_preview
+    png = preview_png
+    download_png
+    expect(File.binread(@download_directory.join("oshilog-card.png"))).to eq(png)
+    expect(@download_directory.children.map { |path| path.basename.to_s }).to eq([ "oshilog-card.png" ])
+    page.execute_script("window.dataOriginalNow=Date.now;Date.now=()=>window.dataOriginalNow()+15*60*1000")
+    expect(page).to have_css("[data-photo-card-target='status']", text: "プレビューの期限が切れました", wait: 5)
+    check_invalidated_preview
+    expect(page).to have_select("対象年", selected: "#{Date.current.year}年")
+    expect(page).to have_button("プレビューを作成", disabled: false)
+    page.execute_script("Date.now=window.dataOriginalNow")
+    generate_preview
+    page.execute_script("Date.now=()=>window.dataOriginalNow()+31*60*1000")
+    expect(page).to have_css("[data-photo-card-target='status']", text: "30分間操作がなかった", wait: 5)
+    check_invalidated_preview
+    expect(page).to have_select("対象年", options: [], disabled: true, visible: :all)
+    expect(page).to have_select("集計対象", options: [], disabled: true, visible: :all)
+    visit new_card_path
+    expect(page).to have_checked_field("ビジュアル重視", exact: true)
+    choose "データ可視化重視", exact: true
+    expect(page).to have_select("対象年", selected: "#{Date.current.year}年")
+    expect(page).to have_select("集計対象", selected: "すべての推し")
+    expect(user.activities).to be_empty
+    expect(user.user_oshis).to be_empty
+  end
+
+  it "rejects a stale data download after a new activity is added and permits regeneration" do
+    create(:profile, user: user)
+    sign_in
+    open_card
+    choose "データ可視化重視", exact: true
+    expect(page).to have_button("プレビューを作成", disabled: false)
+    generate_preview
+    before = preview_png
+    create(:activity, user: user, occurred_on: Date.current, amount: 1000)
+    click_button "PNGをダウンロード"
+    expect(page).to have_css("[data-photo-card-target='error']", text: "元データ", wait: 10)
+    check_invalidated_preview
+    expect(@download_directory.children).to be_empty
+    generate_preview
+    expect(preview_png).not_to eq(before)
+    download_png
+  end
+
+  it "never revives a held data response after its settings change and a newer PNG is generated" do
+    create(:profile, user: user)
+    create(:activity, user: user, occurred_on: Date.new(Date.current.year - 1, 1, 1))
+    sign_in
+    open_card
+    choose "データ可視化重視", exact: true
+    expect(page).to have_button("プレビューを作成", disabled: false)
+    page.execute_script(<<~JS)
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (args[0] === #{card_path.to_json} && !window.dataHeld) {
+          window.dataHeld = true; const blob = await response.blob();
+          await new Promise(resolve => { window.releaseData = resolve; }); window.releasingData = true;
+          return new Response(blob,{status:response.status,headers:response.headers});
+        }
+        return response;
+      };
+      const originalDigest=crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest=(...args)=>originalDigest(...args).then(digest=>{
+        if(window.releasingData)setTimeout(()=>{window.oldDataProcessed=true},0);
+        return digest;
+      });
+    JS
+    click_button "プレビューを作成"
+    page.document.synchronize(10, errors: [ Capybara::ExpectationNotMet ]) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("typeof window.releaseData === 'function'")
+    end
+    select "#{Date.current.year - 1}年", from: "対象年"
+    check_invalidated_preview
+    generate_preview
+    png = preview_png
+    url = find("[data-photo-card-target='image']")["src"]
+    page.execute_script("window.releaseData()")
+    page.document.synchronize(10, errors: [ Capybara::ExpectationNotMet ]) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("window.oldDataProcessed === true")
+    end
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    expect(preview_png).to eq(png)
   end
 end

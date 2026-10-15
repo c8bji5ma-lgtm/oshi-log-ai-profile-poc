@@ -21,6 +21,13 @@ class CardsController < ApplicationController
     render json: { activities: activities }
   end
 
+  def statistics
+    date = Date.current
+    years = OshiData::Summary.available_years(user: current_user, date: date)
+    oshis = current_user.user_oshis.includes(:oshi).map(&:oshi).sort_by { |oshi| [ oshi.name, oshi.id ] }
+    render json: { year: date.year.to_s, years: years.map(&:to_s), oshis: oshis.map { |oshi| { id: oshi.id.to_s, name: oshi.name } } }
+  end
+
   def create
     settings = card_settings
     card = card_renderer(settings)
@@ -40,7 +47,11 @@ class CardsController < ApplicationController
     response.headers["X-PNG-SHA256"] = payload["png_sha256"]
     send_data png, type: "image/png", disposition: "inline"
   rescue UnsupportedTemplate
-    render_error("このテンプレートのPNG生成は未実装です。ビジュアル重視または思い出・活動履歴重視を選択してください。", :unprocessable_content)
+    render_error("このテンプレートは利用できません。", :unprocessable_content)
+  rescue Cards::Data::InvalidSettings
+    render_error("対象年と集計対象を選択肢から正しい形式で指定してください。", :unprocessable_content)
+  rescue Cards::Data::RenderingError
+    render_error("集計カードを描画できません。設定と元データを確認して再生成してください。", :unprocessable_content)
   rescue Cards::Memory::InvalidSettings
     render_error("活動を重複なく1〜3件と、その活動に添付された写真を正しい形式で選択してください。", :unprocessable_content)
   rescue Cards::Crop::Invalid
@@ -78,7 +89,8 @@ class CardsController < ApplicationController
     response.headers["X-PNG-SHA256"] = payload["png_sha256"]
     send_data png, type: "image/png", disposition: "attachment", filename: "oshilog-card.png"
   rescue ActiveRecord::RecordNotFound, Cards::Photo::ProfileRequired, Cards::Photo::InvalidImage,
-    Cards::Crop::Invalid, Cards::Memory::InvalidSettings, ActionController::BadRequest, ArgumentError, UnsupportedTemplate, SourceChanged
+    Cards::Crop::Invalid, Cards::Memory::InvalidSettings, Cards::Data::InvalidSettings,
+    ActionController::BadRequest, ArgumentError, UnsupportedTemplate, SourceChanged
     render_error("元データまたは画像が変更されたか、取得できません。再生成してください。", :conflict)
   end
 
@@ -96,7 +108,10 @@ class CardsController < ApplicationController
     def card_settings(input = params.require(:card))
       raise ActionController::BadRequest unless input.is_a?(ActionController::Parameters)
       template = input.key?(:template) ? input[:template] : "photo"
-      raise UnsupportedTemplate unless %w[photo visual memories memory].include?(template)
+      raise UnsupportedTemplate unless %w[photo visual memories memory data].include?(template)
+      if template == "data"
+        return Cards::Data.settings(input.to_unsafe_h.except("template")).merge(template: "data")
+      end
       if %w[memories memory].include?(template)
         return Cards::Memory.settings(input.to_unsafe_h.except("template")).merge(template: "memory")
       end
@@ -126,7 +141,11 @@ class CardsController < ApplicationController
 
     def card_renderer(settings)
       settings = card_settings(ActionController::Parameters.new(settings))
-      service = settings.delete(:template) == "memory" ? Cards::Memory : Cards::Photo
+      service = case settings.delete(:template)
+      when "memory" then Cards::Memory
+      when "data" then Cards::Data
+      else Cards::Photo
+      end
       service.new(user: current_user, **settings)
     end
 

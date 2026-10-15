@@ -9,7 +9,7 @@ class CardsController < ApplicationController
   def new
     return redirect_to(edit_profile_path, alert: "カードを作る前にプロフィールを保存してください。") unless current_user.profile
 
-    @user_oshis = current_user.user_oshis.includes(:oshi).order(:id)
+    @user_oshis = current_user.user_oshis.includes(:oshi, representative_image_attachment: :blob).order(:id)
   end
 
   def create
@@ -32,6 +32,10 @@ class CardsController < ApplicationController
     send_data png, type: "image/png", disposition: "inline"
   rescue UnsupportedTemplate
     render_error("このテンプレートのPNG生成は未実装です。ビジュアル重視を選択してください。", :unprocessable_content)
+  rescue Cards::Crop::Invalid
+    render_error("画像の調整範囲が不正です。画像内の範囲と1.0〜3.0倍の倍率を指定してください。", :unprocessable_content)
+  rescue ActionDispatch::Http::Parameters::ParseError
+    render_error("画像の調整設定を正しいJSON形式で指定してください。", :bad_request)
   rescue ActionController::BadRequest, ArgumentError
     render_error("推しを重複なく1〜4人、正しい形式で選択してください。", :unprocessable_content)
   rescue ActiveRecord::RecordNotFound
@@ -90,7 +94,18 @@ class CardsController < ApplicationController
       # disabled frames in place instead of shifting the following image source.
       raise ArgumentError unless images.all? { |id| id == "" || ids.include?(id) }
       raise ArgumentError unless [ true, false ].include?(input[:show_introduction])
-      { user_oshi_ids: ids, image_user_oshi_ids: images, show_introduction: input[:show_introduction] }
+      settings = { user_oshi_ids: ids, image_user_oshi_ids: images, show_introduction: input[:show_introduction] }
+      if input.key?(:crops)
+        crops = input[:crops]
+        raise Cards::Crop::Invalid unless crops.is_a?(Array) && crops.length == ids.length
+
+        settings[:crops] = crops.map do |crop|
+          raise Cards::Crop::Invalid unless crop.is_a?(ActionController::Parameters)
+
+          Cards::Crop.normalize(crop.to_unsafe_h)
+        end
+      end
+      settings
     end
 
     def verifier

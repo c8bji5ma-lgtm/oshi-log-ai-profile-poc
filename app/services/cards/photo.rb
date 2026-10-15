@@ -23,7 +23,7 @@ module Cards
     class FontUnavailable < StandardError; end
     class ProfileRequired < StandardError; end
 
-    def initialize(user:, user_oshi_ids:, image_user_oshi_ids:, show_introduction: true)
+    def initialize(user:, user_oshi_ids:, image_user_oshi_ids:, show_introduction: true, crops: nil)
       @profile = Profile.find_by(user_id: user.id) || raise(ProfileRequired)
       records = user.user_oshis.includes(:oshi, representative_image_attachment: :blob)
         .where(id: user_oshi_ids).index_by { |record| record.id.to_s }
@@ -34,6 +34,8 @@ module Cards
       end
       @image_bytes = {}
       @show_introduction = show_introduction
+      raise Crop::Invalid unless crops.nil? || (crops.is_a?(Array) && crops.length == @user_oshis.length)
+      @crops = (crops || Array.new(@user_oshis.length, Crop::DEFAULT)).map { |crop| Crop.normalize(crop) }
     end
 
     def fingerprint
@@ -52,7 +54,7 @@ module Cards
       layout = LAYOUTS.fetch(@user_oshis.length)
       @user_oshis.each_with_index do |record, index|
         x = layout[:xs][index]
-        canvas = picture(canvas, @image_owners[index], x: x, width: layout[:width], height: layout[:height])
+        canvas = picture(canvas, @image_owners[index], crop: @crops[index], x: x, width: layout[:width], height: layout[:height])
         canvas = text(canvas, record.oshi.name, x: single? ? 568 : x, y: layout[:name_y],
           width: single? ? 984 : layout[:width], size: layout[:name_size], limit: layout[:limit],
           max_lines: 2, line_height: single? ? 66 : 40)
@@ -76,15 +78,17 @@ module Cards
         @user_oshis.length == 1
       end
 
-      def picture(canvas, owner, x:, width:, height:)
+      def picture(canvas, owner, crop:, x:, width:, height:)
         bytes = image_bytes(owner) if owner
         if bytes
           source = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error).autorot.colourspace(:srgb)
-          scale = [ width.to_f / source.width, height.to_f / source.height ].max
-          resized = source.resize(scale)
-          photo = resized.crop((resized.width - width) / 2, (resized.height - height) / 2, width, height)
+          geometry = Crop.geometry(image_width: source.width, image_height: source.height, width: width, height: height, crop: crop)
+          resized = source.resize(geometry[:scale])
+          photo = resized.crop(geometry[:left], geometry[:top], width, height)
           canvas.composite(photo, :over, x: x, y: 176)
         else
+          raise Crop::Invalid unless crop == Crop::DEFAULT
+
           placeholder = Vips::Image.black(width, height, bands: 3).new_from_image([ 240, 243, 246 ]).copy(interpretation: :srgb)
           canvas = canvas.composite(placeholder, :over, x: x, y: 176)
           text(canvas, owner ? "画像未登録" : "画像を使用しない", x: x + (width - 272) / 2,

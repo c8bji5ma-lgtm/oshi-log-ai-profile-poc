@@ -8,7 +8,8 @@
 <div class="card-template-editor" data-controller="photo-card"
        data-photo-card-create-url-value="<%= card_path %>"
        data-photo-card-download-url-value="<%= download_card_path %>"
-       data-action="turbo:before-cache@document->photo-card#dispose pagehide@window->photo-card#dispose">
+       data-photo-card-layouts-value="<%= Cards::Photo::LAYOUTS.transform_values { |layout| layout.slice(:width, :height) }.to_json %>"
+       data-action="turbo:before-cache@document->photo-card#dispose pagehide@window->photo-card#dispose image-crop:confirm->photo-card#confirmCrop image-crop:activity->photo-card#cropActivity">
   <section class="card" aria-label="テンプレート選択">
     <form data-photo-card-target="settingsForm">
       <fieldset class="card-template-choices" aria-describedby="card-template-help">
@@ -44,6 +45,7 @@
             <label>
               <input type="checkbox" name="user_oshi_ids[]" value="<%= user_oshi.id %>"
                      data-photo-card-target="oshi" data-name="<%= user_oshi.oshi.name %>"
+                     data-image-url="<%= protected_image_path(user_oshi.representative_image.attachment) if user_oshi.representative_image.attached? %>"
                      data-action="change->photo-card#selectOshi" <%= "checked" if index.zero? %>>
               <%= user_oshi.oshi.name %>
             </label>
@@ -56,10 +58,11 @@
         <div class="form-field">
           <label data-frame-label></label>
           <select data-frame-source></select>
+          <button type="button" class="button button-secondary" data-crop-for data-action="photo-card#editCrop" disabled>画像を調整</button>
         </div>
       </template>
       <p><label><input type="checkbox" name="show_introduction" checked> 保存済みの自己紹介を表示する</label></p>
-      <p>各枠には、選択中の推しの代表画像を使えます。画像未登録でも作成できます。画像は枠の中央に合わせて表示します。</p>
+      <p>各枠には、選択中の推しの代表画像を使えます。画像未登録でも作成できます。「画像を調整」で表示範囲を変更できます。初期位置は中央です。</p>
       <button type="submit" class="button" data-photo-card-target="generateButton" disabled>プレビューを作成</button>
     </form>
   </section>
@@ -82,4 +85,29 @@
     <p>プレビューの有効期限は生成成功から15分です。</p>
     <button type="button" class="button" data-photo-card-target="downloadButton" data-action="photo-card#download" disabled>PNGをダウンロード</button>
   </section>
+  <dialog class="image-crop-dialog" data-controller="image-crop" data-photo-card-target="cropDialog"
+          aria-labelledby="image-crop-title" aria-describedby="image-crop-help"
+          data-action="crop:open->image-crop#open crop:cancel->image-crop#cancel cancel->image-crop#cancel resize@window->image-crop#resized blur@window->image-crop#stopDrag">
+    <h2 id="image-crop-title">画像を調整</h2>
+    <p id="image-crop-help">写真をドラッグして位置を調整します。写真枠にフォーカスすると矢印キーでも移動できます。倍率は1.0〜3.0倍です。</p>
+    <div class="image-crop-viewport" data-image-crop-target="viewport" tabindex="0" role="group" aria-label="写真の表示範囲" aria-describedby="image-crop-help"
+         data-action="pointerdown->image-crop#startDrag pointermove->image-crop#drag pointerup->image-crop#stopDrag pointercancel->image-crop#stopDrag lostpointercapture->image-crop#stopDrag keydown->image-crop#moveKey">
+      <img data-image-crop-target="photo" alt="表示範囲を調整する登録画像" draggable="false" data-action="load->image-crop#loaded error->image-crop#failed">
+    </div>
+    <div class="form-field">
+      <label for="image-crop-zoom">拡大倍率 <output for="image-crop-zoom" data-image-crop-target="scale">1.00倍</output></label>
+      <input id="image-crop-zoom" type="range" min="1" max="3" step="0.01" value="1" data-image-crop-target="zoom" data-action="input->image-crop#zoom">
+    </div>
+    <div class="actions" role="group" aria-label="写真の移動">
+      <% [ [ "左へ", -1, 0 ], [ "右へ", 1, 0 ], [ "上へ", 0, -1 ], [ "下へ", 0, 1 ] ].each do |label, dx, dy| %>
+        <button type="button" class="button button-secondary" data-dx="<%= dx %>" data-dy="<%= dy %>" data-action="image-crop#moveButton"><%= label %></button>
+      <% end %>
+    </div>
+    <p role="alert" data-image-crop-target="error"></p>
+    <div class="actions image-crop-actions">
+      <button type="button" class="button button-secondary" data-action="image-crop#reset">リセット</button>
+      <button type="button" class="button button-secondary" data-action="image-crop#cancel">キャンセル</button>
+      <button type="button" class="button" data-image-crop-target="confirm" data-action="image-crop#confirm" disabled>この範囲で確定</button>
+    </div>
+  </dialog>
 </div>

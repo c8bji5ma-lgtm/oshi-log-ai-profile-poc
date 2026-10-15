@@ -1,8 +1,9 @@
 import { Controller } from "@hotwired/stimulus"
+import { defaultCrop } from "lib/crop_geometry"
 
 export default class extends Controller {
-  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm"]
-  static values = { createUrl: String, downloadUrl: String }
+  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm", "cropDialog"]
+  static values = { createUrl: String, downloadUrl: String, layouts: Object }
 
   connect() {
     this.sequence = (this.sequence || 0) + 1
@@ -15,6 +16,7 @@ export default class extends Controller {
     })
     this.selectedIds = this.oshiTargets.filter(input => input.checked).map(input => input.value)
     this.imageSources = new Map(this.selectedIds.map(id => [id, id]))
+    this.crops = new Map()
     this.renderFrames()
     this.renderPanels()
     this.timer = setInterval(() => this.checkExpiry(), 1000)
@@ -25,6 +27,7 @@ export default class extends Controller {
   switchTemplate(event) {
     if (this.disposed || !this.checkExpiry()) return
     this.lastAction = Date.now()
+    this.closeCrop()
     this.template = event.target.value
     this.invalidate()
     this.renderPanels()
@@ -40,8 +43,39 @@ export default class extends Controller {
 
   get canGenerate() { return !this.disposed && this.template === "photo" && this.selectedIds?.length > 0 }
 
+  cropActivity() {
+    if (!this.disposed && this.checkExpiry()) this.lastAction = Date.now()
+  }
+
+  closeCrop() { this.cropDialogTarget.dispatchEvent(new Event("crop:cancel")) }
+
+  editCrop(event) {
+    if (this.disposed || !this.checkExpiry() || this.template !== "photo") return
+    this.lastAction = Date.now()
+    const frameId = event.currentTarget.dataset.cropFor
+    const sourceId = this.imageSources.get(frameId)
+    const source = this.oshiTargets.find(input => input.value === sourceId)
+    if (!source?.dataset.imageUrl) return
+    this.cropDialogTarget.dispatchEvent(new CustomEvent("crop:open", { detail: {
+      frameId, sourceId, src: source.dataset.imageUrl, opener: event.currentTarget,
+      crop: this.crops.get(frameId) || defaultCrop(), ...this.layoutsValue[this.selectedIds.length]
+    } }))
+  }
+
+  confirmCrop(event) {
+    if (this.disposed || !this.checkExpiry() || this.template !== "photo") return
+    const { frameId, sourceId, crop } = event.detail
+    if (!this.selectedIds.includes(frameId) || this.imageSources.get(frameId) !== sourceId) return
+    const old = this.crops.get(frameId) || defaultCrop()
+    if (["x", "y", "zoom"].every(key => Math.abs(old[key] - crop[key]) <= 1e-9)) return
+    this.crops.set(frameId, crop)
+    this.invalidate()
+    this.statusTarget.textContent = "画像の調整範囲を変更しました。プレビューを作成してください。"
+  }
+
   selectOshi(event) {
     if (this.disposed || !this.checkExpiry()) return
+    this.closeCrop()
     const input = event.target
     this.lastAction = Date.now()
     if (input.checked) {
@@ -56,9 +90,13 @@ export default class extends Controller {
     } else {
       this.selectedIds = this.selectedIds.filter(id => id !== input.value)
       this.imageSources.delete(input.value)
+      this.crops.delete(input.value)
       for (const id of this.selectedIds) {
         const source = this.imageSources.get(id)
-        if (source && !this.selectedIds.includes(source)) this.imageSources.set(id, id)
+        if (source && !this.selectedIds.includes(source)) {
+          this.imageSources.set(id, id)
+          this.crops.delete(id)
+        }
       }
     }
     this.renderFrames()
@@ -77,6 +115,11 @@ export default class extends Controller {
       source.add(new Option("画像を表示しない", ""))
       for (const candidate of this.selectedIds) source.add(new Option(`${names.get(candidate)}の代表画像`, candidate))
       source.value = this.imageSources.get(id) || ""
+      const adjust = row.querySelector("[data-crop-for]")
+      adjust.dataset.cropFor = id
+      adjust.setAttribute("aria-label", `${index + 1}. ${names.get(id)}の画像を調整`)
+      const imageOwner = this.oshiTargets.find(input => input.value === this.imageSources.get(id))
+      adjust.disabled = !imageOwner?.dataset.imageUrl
       return row
     })
     this.framesTarget.replaceChildren(...rows)
@@ -87,7 +130,13 @@ export default class extends Controller {
     if (this.disposed || !this.checkExpiry()) return
     this.lastAction = Date.now()
     const id = event.target.dataset.imageFor
-    if (id) this.imageSources.set(id, event.target.value)
+    if (id) {
+      this.closeCrop()
+      this.imageSources.set(id, event.target.value)
+      this.crops.delete(id)
+      const owner = this.oshiTargets.find(input => input.value === event.target.value)
+      event.target.closest(".form-field").querySelector("[data-crop-for]").disabled = !owner?.dataset.imageUrl
+    }
     this.invalidate()
     this.errorTarget.textContent = ""
     this.statusTarget.textContent = this.template === "photo"
@@ -116,6 +165,7 @@ export default class extends Controller {
           template: "photo",
           user_oshi_ids: this.selectedIds,
           image_user_oshi_ids: this.selectedIds.map(id => this.imageSources.get(id)),
+          crops: this.selectedIds.map(id => this.crops.get(id) || defaultCrop()),
           show_introduction: form.show_introduction.checked
         } })
       })
@@ -218,6 +268,7 @@ export default class extends Controller {
   dispose() {
     this.disposed = true
     clearInterval(this.timer)
+    this.closeCrop()
     this.invalidate()
     this.settingsFormTargets.forEach(form => {
       form.reset()
@@ -227,6 +278,7 @@ export default class extends Controller {
     this.renderPanels()
     this.selectedIds = []
     this.imageSources?.clear()
+    this.crops?.clear()
     this.framesTarget.replaceChildren()
     this.generateButtonTarget.disabled = true
   }

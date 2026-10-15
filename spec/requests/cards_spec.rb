@@ -697,4 +697,24 @@ RSpec.describe "Photo cards", type: :request do
   ensure
     ActiveSupport::Notifications.unsubscribe(subscription) if subscription
   end
+
+  [ :outside, :hidden, :absent ].each do |image_state|
+    it "revalidates the actual crop window from a signed receipt for #{image_state} images" do
+      profile
+      attach_coordinates(user_oshi) unless image_state == :absent
+      login
+      images = image_state == :hidden ? [ "" ] : [ user_oshi.id.to_s ]
+      generate_card(image_user_oshi_ids: images, crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:ok)
+      png = response.body.dup
+      verifier = Rails.application.message_verifier(CardsController::PURPOSE)
+      payload = verifier.verified(response.headers.fetch("X-Card-Receipt"), purpose: CardsController::PURPOSE)
+      payload["settings"]["crops"] = [ image_state == :outside ? { "x" => 0, "y" => 0.5, "zoom" => 1 } : { "x" => 0.5, "y" => 0.5, "zoom" => 2 } ]
+      receipt = verifier.generate(payload, purpose: CardsController::PURPOSE)
+      expect_any_instance_of(Cards::Photo).not_to receive(:render)
+      save_card(png, receipt)
+      expect(response).to have_http_status(:conflict)
+      expect(response.media_type).to eq("application/json")
+    end
+  end
 end

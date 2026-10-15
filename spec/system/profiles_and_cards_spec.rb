@@ -1090,4 +1090,114 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
     expect(preview_png).to eq(png)
   end
+
+  it "edits, saves and restores all three templates in one session without mixing images, crops or settings" do
+    create(:profile, user: user)
+    second = create(:user_oshi, user: user)
+    bytes = attach_coordinates(user_oshi, orientation: 6)
+    first = build(:activity, :without_oshis, user: user, occurred_on: Date.current, amount: 1000)
+    Activities::Save.call(activity: first, oshi_ids: [ user_oshi.oshi_id ])
+    attach_memory_photo(first)
+    first.images.attach(user_oshi.representative_image.blob)
+    other = build(:activity, :without_oshis, user: user, occurred_on: Date.current - 1)
+    Activities::Save.call(activity: other, oshi_ids: [ second.oshi_id ])
+    past = build(:activity, :without_oshis, user: user, occurred_on: Date.new(Date.current.year - 1, 12, 31), amount: 2000)
+    Activities::Save.call(activity: past, oshi_ids: [ second.oshi_id ])
+    original_profile = user.profile.reload.attributes
+    original_blob = user_oshi.representative_image.blob.reload.attributes
+    models = [ Profile, UserOshi, Activity, ActivityOshi, ActiveStorage::Blob, ActiveStorage::Attachment ]
+    counts = models.map(&:count)
+    saved = []
+    downloaded_paths = []
+    verified_download = lambda do
+      png = preview_png
+      directory = @download_directory.join("template-#{saved.length + 1}")
+      FileUtils.mkdir_p(directory)
+      @download_driver.browser.download_path = directory.to_s
+      click_button "PNGをダウンロード"
+      expect(page).to have_css("[data-photo-card-target='status']", text: "ダウンロードを開始しました", wait: 10)
+      downloaded = nil
+      page.document.synchronize(10, errors: [ Capybara::ExpectationNotMet ]) do
+        fresh = directory.children
+        unless fresh.one? && fresh.first.extname == ".png" && directory.glob("*.crdownload").empty?
+          raise Capybara::ExpectationNotMet, "Expected exactly one new completed PNG download"
+        end
+        downloaded = fresh.first
+      end
+      expect(File.binread(downloaded)).to eq(png)
+      expect(File.binread(downloaded, 8)).to eq(Cards::Photo::PNG_SIGNATURE)
+      decoded = Vips::Image.new_from_file(downloaded.to_s)
+      expect([ decoded.width, decoded.height ]).to eq([ 1600, 1000 ])
+      saved << png
+      downloaded_paths << downloaded
+    end
+    sign_in
+    open_card
+    check second.oshi.name, exact: true
+    select "画像を表示しない", from: "2. #{second.oshi.name}の画像"
+    uncheck "保存済みの自己紹介を表示する"
+    open_crop
+    zoom_to_maximum
+    find("[data-image-crop-target='viewport']").send_keys(:arrow_left)
+    click_button "この範囲で確定"
+    generate_preview
+    verified_download.call
+
+    choose "思い出・活動履歴重視", exact: true
+    check_invalidated_preview
+    expect(page).to have_select("1. 掲載する活動", selected: memory_choice(first))
+    select "写真2", from: "1. 活動の写真"
+    open_memory_crop(first)
+    find("#image-crop-zoom").send_keys(:home, *Array.new(50, :arrow_right))
+    expect(find("#image-crop-zoom").value).to eq("1.5")
+    find("[data-image-crop-target='viewport']").send_keys(:arrow_right)
+    click_button "この範囲で確定"
+    find("[data-memory-down][data-activity-id='#{first.id}']").click
+    generate_preview
+    verified_download.call
+
+    choose "データ可視化重視", exact: true
+    check_invalidated_preview
+    select "#{Date.current.year - 1}年", from: "対象年"
+    select second.oshi.name, from: "集計対象"
+    generate_preview
+    verified_download.call
+
+    choose "ビジュアル重視", exact: true
+    check_invalidated_preview
+    expect(page).to have_checked_field(user_oshi.oshi.name, exact: true)
+    expect(page).to have_checked_field(second.oshi.name, exact: true)
+    expect(page).to have_select("2. #{second.oshi.name}の画像", selected: "画像を表示しない")
+    expect(page).to have_unchecked_field("保存済みの自己紹介を表示する")
+    open_crop
+    expect(find("#image-crop-zoom").value).to eq("3")
+    click_button "キャンセル"
+    generate_preview
+    expect(preview_png).to eq(saved[0])
+
+    choose "思い出・活動履歴重視", exact: true
+    check_invalidated_preview
+    expect(page).to have_select("2. 掲載する活動", selected: memory_choice(first))
+    expect(page).to have_select("2. 活動の写真", selected: "写真2")
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("1.5")
+    click_button "キャンセル"
+    generate_preview
+    expect(preview_png).to eq(saved[1])
+
+    choose "データ可視化重視", exact: true
+    check_invalidated_preview
+    expect(page).to have_select("対象年", selected: "#{Date.current.year - 1}年")
+    expect(page).to have_select("集計対象", selected: second.oshi.name)
+    generate_preview
+    expect(preview_png).to eq(saved[2])
+    files = @download_directory.glob("**/*").select(&:file?)
+    expect(files).to match_array(downloaded_paths)
+    expect(files.map { |path| File.binread(path) }).to match_array(saved)
+    expect(models.map(&:count)).to eq(counts)
+    expect(user.profile.reload.attributes).to eq(original_profile)
+    expect(user_oshi.representative_image.blob.reload.attributes).to eq(original_blob)
+    expect(user_oshi.representative_image.download).to eq(bytes)
+    expect(first.images_attachments.order(:id).last.blob.download).to eq(bytes)
+  end
 end

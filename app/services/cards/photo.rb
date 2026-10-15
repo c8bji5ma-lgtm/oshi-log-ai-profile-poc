@@ -39,6 +39,7 @@ module Cards
     end
 
     def fingerprint
+      validate_crops!
       Digest::SHA256.hexdigest(JSON.generate([
         @profile.id, @profile.display_name, @profile.updated_at.iso8601(6),
         (@profile.introduction if @show_introduction),
@@ -74,6 +75,24 @@ module Cards
     end
 
     private
+      # Fingerprints are checked on download without rendering again. Validate
+      # restored settings against the actual oriented image in that path too.
+      def validate_crops!
+        layout = LAYOUTS.fetch(@user_oshis.length)
+        @image_owners.each_with_index do |owner, index|
+          bytes = owner && image_bytes(owner)
+          if bytes
+            source = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error).autorot
+            Crop.geometry(image_width: source.width, image_height: source.height,
+              width: layout[:width], height: layout[:height], crop: @crops[index])
+          else
+            raise Crop::Invalid unless @crops[index] == Crop::DEFAULT
+          end
+        end
+      rescue Vips::Error
+        raise InvalidImage
+      end
+
       def single?
         @user_oshis.length == 1
       end

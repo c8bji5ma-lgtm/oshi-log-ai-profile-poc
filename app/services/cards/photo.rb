@@ -111,44 +111,7 @@ module Cards
 
         blob = attachment.blob
         return @image_bytes[blob.id] if @image_bytes.key?(blob.id)
-        raise InvalidImage unless ImageAttachmentValidator::CONTENT_TYPES.include?(blob.content_type)
-        raise InvalidImage unless blob.byte_size.positive? && blob.byte_size <= ImageAttachmentValidator::MAX_BYTE_SIZE
-
-        bytes = blob.download
-        raise InvalidImage unless bytes.bytesize == blob.byte_size && Digest::MD5.base64digest(bytes) == blob.checksum
-        validate_format!(bytes, blob.content_type)
-        image = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error)
-        raise InvalidImage unless image.width.positive? && image.height.positive?
-        raise InvalidImage if image.get_typeof("n-pages").positive? && image.get("n-pages") != 1
-        @image_bytes[blob.id] = bytes
-      rescue ActiveStorage::FileNotFoundError, ActiveStorage::IntegrityError, Vips::Error, Errno::ENOENT
-        raise InvalidImage
-      end
-
-      def validate_format!(bytes, type)
-        case type
-        when "image/jpeg"
-          raise InvalidImage unless bytes.start_with?("\xff\xd8\xff".b)
-        when "image/png"
-          raise InvalidImage unless bytes.start_with?(PNG_SIGNATURE)
-          offset = 8
-          while offset + 12 <= bytes.bytesize
-            length = bytes.byteslice(offset, 4).unpack1("N")
-            kind = bytes.byteslice(offset + 4, 4)
-            raise InvalidImage if kind == "acTL" || offset + length + 12 > bytes.bytesize
-            offset += length + 12
-            break if kind == "IEND"
-          end
-        when "image/webp"
-          raise InvalidImage unless bytes.start_with?("RIFF") && bytes.byteslice(8, 4) == "WEBP"
-          offset = 12
-          while offset + 8 <= bytes.bytesize
-            kind = bytes.byteslice(offset, 4)
-            length = bytes.byteslice(offset + 4, 4).unpack1("V")
-            raise InvalidImage if %w[ANIM ANMF].include?(kind) || offset + length + 8 > bytes.bytesize
-            offset += 8 + length + length % 2
-          end
-        end
+        @image_bytes[blob.id] = ImageSource.read(blob)
       end
 
       def glyph_image(value, size)

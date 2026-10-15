@@ -7,6 +7,7 @@
 <p>テンプレートを選んでカードを作成します。選択・編集内容と作成した画像は、このページを離れるか30分間操作がないと破棄されます。</p>
 <div class="card-template-editor" data-controller="photo-card"
        data-photo-card-create-url-value="<%= card_path %>"
+       data-photo-card-memories-url-value="<%= memories_card_path %>"
        data-photo-card-download-url-value="<%= download_card_path %>"
        data-photo-card-layouts-value="<%= Cards::Photo::LAYOUTS.transform_values { |layout| layout.slice(:width, :height) }.to_json %>"
        data-action="turbo:before-cache@document->photo-card#dispose pagehide@window->photo-card#dispose image-crop:confirm->photo-card#confirmCrop image-crop:activity->photo-card#cropActivity">
@@ -15,7 +16,7 @@
       <fieldset class="card-template-choices" aria-describedby="card-template-help">
         <legend>テンプレートを選択</legend>
         <% [ [ "photo", "ビジュアル重視", "推し1〜4人の写真を中心に配置します。PNG生成に対応しています。" ],
-             [ "memories", "思い出・活動履歴重視", "PNG生成は未実装です。設定領域のみ利用できます。" ],
+             [ "memories", "思い出・活動履歴重視", "活動記録1〜3件を写真と一緒に並べます。PNG生成に対応しています。" ],
              [ "data", "データ可視化重視", "PNG生成は未実装です。設定領域のみ利用できます。" ] ].each do |value, name, description| %>
           <div class="card-template-choice">
             <label>
@@ -66,7 +67,42 @@
       <button type="submit" class="button" data-photo-card-target="generateButton" disabled>プレビューを作成</button>
     </form>
   </section>
-  <% [ [ "memories", "思い出・活動履歴重視" ], [ "data", "データ可視化重視" ] ].each do |value, name| %>
+  <section class="card" id="card-settings-memories" aria-labelledby="card-heading-memories"
+           data-photo-card-target="panel" data-template="memories" hidden>
+    <h2 id="card-heading-memories">思い出・活動履歴重視の設定</h2>
+    <p>今日以前の活動を1〜3件、左から順に並べます。表示名・活動日・タイトル・カテゴリ・推し名を掲載します。自己紹介・メモ・金額・場所は掲載しません。</p>
+    <p role="status" data-photo-card-target="memoryStatus">活動記録を読み込みます。</p>
+    <button type="button" class="button button-secondary" data-photo-card-target="memoryRetry" data-action="photo-card#loadMemories" hidden>活動記録を再読み込み</button>
+    <p data-photo-card-target="memoryEmpty" hidden>掲載できる活動記録がありません。<%= link_to "活動を登録", new_activity_path %></p>
+    <form data-photo-card-target="settingsForm" data-action="submit->photo-card#generate">
+      <div class="memory-card-frames" data-photo-card-target="memoryFrames"></div>
+      <div class="actions">
+        <button type="button" class="button button-secondary" data-photo-card-target="memoryAdd" data-action="photo-card#addMemory" disabled>活動を追加</button>
+        <button type="submit" class="button" data-photo-card-target="generateButton" disabled>プレビューを作成</button>
+      </div>
+    </form>
+    <template data-photo-card-target="memoryFrameTemplate">
+      <fieldset class="memory-card-frame">
+        <legend data-memory-heading></legend>
+        <div class="form-field">
+          <label data-memory-activity-label></label>
+          <select data-memory-activity data-action="change->photo-card#changeMemory"></select>
+        </div>
+        <p data-memory-details></p>
+        <div class="form-field">
+          <label data-memory-photo-label></label>
+          <select data-memory-photo data-action="change->photo-card#changeMemoryPhoto"></select>
+          <button type="button" class="button button-secondary" data-memory-crop data-action="photo-card#editMemoryCrop">画像を調整</button>
+        </div>
+        <div class="actions">
+          <button type="button" class="button button-secondary" data-memory-up data-action="photo-card#moveMemory">前へ移動</button>
+          <button type="button" class="button button-secondary" data-memory-down data-action="photo-card#moveMemory">後ろへ移動</button>
+          <button type="button" class="button button-secondary" data-memory-remove data-action="photo-card#removeMemory">掲載から外す</button>
+        </div>
+      </fieldset>
+    </template>
+  </section>
+  <% [ [ "data", "データ可視化重視" ] ].each do |value, name| %>
     <section class="card" id="card-settings-<%= value %>" aria-labelledby="card-heading-<%= value %>"
              data-photo-card-target="panel" data-template="<%= value %>" hidden>
       <h2 id="card-heading-<%= value %>"><%= name %>の設定</h2>

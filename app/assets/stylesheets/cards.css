@@ -137,3 +137,32 @@ html:has(.image-crop-dialog[open]) {
   gap: 0.5rem;
   min-height: 44px;
 }
+
+.memory-card-frames {
+  display: grid;
+  gap: 1.5rem;
+  margin-block: 1rem 1.5rem;
+}
+
+.memory-card-frame {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #d5dee8;
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-card-frame select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+.memory-card-frame .actions {
+  flex-wrap: wrap;
+}
+
+.memory-card-frame button {
+  min-height: 44px;
+  font: inherit;
+}

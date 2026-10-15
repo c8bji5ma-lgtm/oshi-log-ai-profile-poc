@@ -12,12 +12,21 @@ class CardsController < ApplicationController
     @user_oshis = current_user.user_oshis.includes(:oshi, representative_image_attachment: :blob).order(:id)
   end
 
+  def memories
+    activities = Cards::Memory.candidates(current_user).map do |activity|
+      { id: activity.id.to_s, date: activity.occurred_on.strftime("%Y.%m.%d"), title: activity.title,
+        category: activity.activity_type, oshis: activity.oshis.sort_by(&:id).map(&:name),
+        images: activity.images_attachments.sort_by(&:id).map { |image| { id: image.id.to_s, url: protected_image_path(image) } } }
+    end
+    render json: { activities: activities }
+  end
+
   def create
     settings = card_settings
-    photo = Cards::Photo.new(user: current_user, **settings)
-    fingerprint = photo.fingerprint
-    png = photo.render
-    raise SourceChanged unless Cards::Photo.new(user: current_user, **settings).fingerprint == fingerprint
+    card = card_renderer(settings)
+    fingerprint = card.fingerprint
+    png = card.render
+    raise SourceChanged unless card_renderer(settings).fingerprint == fingerprint
 
     generated_at = Time.current
     payload = {
@@ -31,7 +40,9 @@ class CardsController < ApplicationController
     response.headers["X-PNG-SHA256"] = payload["png_sha256"]
     send_data png, type: "image/png", disposition: "inline"
   rescue UnsupportedTemplate
-    render_error("このテンプレートのPNG生成は未実装です。ビジュアル重視を選択してください。", :unprocessable_content)
+    render_error("このテンプレートのPNG生成は未実装です。ビジュアル重視または思い出・活動履歴重視を選択してください。", :unprocessable_content)
+  rescue Cards::Memory::InvalidSettings
+    render_error("活動を重複なく1〜3件と、その活動に添付された写真を正しい形式で選択してください。", :unprocessable_content)
   rescue Cards::Crop::Invalid
     render_error("画像の調整範囲が不正です。画像内の範囲と1.0〜3.0倍の倍率を指定してください。", :unprocessable_content)
   rescue ActionDispatch::Http::Parameters::ParseError
@@ -39,7 +50,8 @@ class CardsController < ApplicationController
   rescue ActionController::BadRequest, ArgumentError
     render_error("推しを重複なく1〜4人、正しい形式で選択してください。", :unprocessable_content)
   rescue ActiveRecord::RecordNotFound
-    render_error("選択した推しは利用できません。", :not_found)
+    message = settings && settings[:template] == "memory" ? "選択した活動・写真は利用できません。" : "選択した推しは利用できません。"
+    render_error(message, :not_found)
   rescue Cards::Photo::ProfileRequired
     render_error("プロフィールを保存してから作成してください。", :unprocessable_content)
   rescue Cards::Photo::InvalidImage
@@ -54,19 +66,19 @@ class CardsController < ApplicationController
     receipt = request.headers["X-Card-Receipt"].to_s
     return render_error("保存情報が不正です。", :unprocessable_content) if receipt.bytesize > 16.kilobytes
     payload = verifier.verified(receipt, purpose: PURPOSE)
-    return render_error("保存情報が不正です。再生成してください。", :unprocessable_content) unless payload
+    return render_error("保存情報が不正です。再生成してください。", :unprocessable_content) unless valid_payload?(payload)
     return render_error("この画像は保存できません。", :forbidden) unless payload["user_id"] == current_user.id && payload["auth_context"] == auth_context
     return render_error("プレビューの期限が切れました。再生成してください。", :gone) if Time.current.to_i >= payload["expires_at"]
     return render_error("画像のサイズが一致しません。", :unprocessable_content) unless request.content_length == payload["byte_size"]
 
     png = request.raw_post
     return render_error("確認した画像と一致しません。", :unprocessable_content) unless Digest::SHA256.hexdigest(png) == payload["png_sha256"]
-    settings = payload["settings"].symbolize_keys
-    raise SourceChanged unless Cards::Photo.new(user: current_user, **settings).fingerprint == payload["source"]
+    raise SourceChanged unless card_renderer(payload["settings"]).fingerprint == payload["source"]
 
     response.headers["X-PNG-SHA256"] = payload["png_sha256"]
     send_data png, type: "image/png", disposition: "attachment", filename: "oshilog-card.png"
-  rescue ActiveRecord::RecordNotFound, Cards::Photo::ProfileRequired, Cards::Photo::InvalidImage, SourceChanged
+  rescue ActiveRecord::RecordNotFound, Cards::Photo::ProfileRequired, Cards::Photo::InvalidImage,
+    Cards::Crop::Invalid, Cards::Memory::InvalidSettings, ActionController::BadRequest, ArgumentError, UnsupportedTemplate, SourceChanged
     render_error("元データまたは画像が変更されたか、取得できません。再生成してください。", :conflict)
   end
 
@@ -81,10 +93,14 @@ class CardsController < ApplicationController
       render_error("ログインしてください。", :unauthorized) if action_name != "new" && !user_signed_in?
     end
 
-    def card_settings
-      input = params.require(:card)
+    def card_settings(input = params.require(:card))
       raise ActionController::BadRequest unless input.is_a?(ActionController::Parameters)
-      raise UnsupportedTemplate if input.key?(:template) && input[:template] != "photo"
+      template = input.key?(:template) ? input[:template] : "photo"
+      raise UnsupportedTemplate unless %w[photo visual memories memory].include?(template)
+      if %w[memories memory].include?(template)
+        return Cards::Memory.settings(input.to_unsafe_h.except("template")).merge(template: "memory")
+      end
+      raise ArgumentError unless (input.keys - %w[template user_oshi_ids image_user_oshi_ids show_introduction crops]).empty?
       ids = input[:user_oshi_ids]
       raise ArgumentError unless ids.is_a?(Array) && ids.length.between?(1, 4) && ids.uniq.length == ids.length
       raise ArgumentError unless ids.all? { |id| id.is_a?(String) && id.match?(/\A[1-9][0-9]{0,18}\z/) && id.to_i <= 2**63 - 1 }
@@ -106,6 +122,19 @@ class CardsController < ApplicationController
         end
       end
       settings
+    end
+
+    def card_renderer(settings)
+      settings = card_settings(ActionController::Parameters.new(settings))
+      service = settings.delete(:template) == "memory" ? Cards::Memory : Cards::Photo
+      service.new(user: current_user, **settings)
+    end
+
+    def valid_payload?(payload)
+      payload.is_a?(Hash) && payload["user_id"].is_a?(Integer) && payload["auth_context"].is_a?(String) &&
+        payload["settings"].is_a?(Hash) && payload["source"].is_a?(String) &&
+        payload["png_sha256"].is_a?(String) && payload["byte_size"].is_a?(Integer) && payload["byte_size"].positive? &&
+        payload["expires_at"].is_a?(Integer)
     end
 
     def verifier

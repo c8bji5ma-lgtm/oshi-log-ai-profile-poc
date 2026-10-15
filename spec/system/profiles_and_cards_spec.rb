@@ -418,6 +418,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
   it "starts with photo and keeps each template's settings independently while discarding previous previews" do
     create(:profile, user: user)
     second = create(:user_oshi, user: user, oshi: create(:oshi, :approved, name: "設定を保持する推し"))
+    memory = create(:activity, user: user, occurred_on: Date.current)
     sign_in
     open_card
     expect(page).to have_checked_field("ビジュアル重視", exact: true)
@@ -436,10 +437,10 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "思い出・活動履歴重視", exact: true
     check_invalidated_preview
     within("#card-settings-memories") do
-      expect(page).to have_text("PNG生成は未実装")
-      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
-      uncheck "保存済みの自己紹介を表示する"
-      expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
+      expect(page).to have_select("1. 掲載する活動", selected: "#{memory.occurred_on.strftime('%Y.%m.%d')} #{memory.title}")
+      expect(page).not_to have_field("保存済みの自己紹介を表示する")
+      click_button "掲載から外す"
+      expect(page).to have_button("プレビューを作成", disabled: true)
     end
     choose "データ可視化重視", exact: true
     expect(page).not_to have_css("#card-settings-photo, #card-settings-memories")
@@ -448,7 +449,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
       expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
     end
     choose "思い出・活動履歴重視", exact: true
-    within("#card-settings-memories") { expect(page).to have_unchecked_field("保存済みの自己紹介を表示する") }
+    within("#card-settings-memories") { expect(page).not_to have_select("1. 掲載する活動") }
     choose "ビジュアル重視", exact: true
     expect(page).to have_checked_field(user_oshi.oshi.name, exact: true)
     expect(page).to have_checked_field(second.oshi.name, exact: true)
@@ -469,7 +470,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
       const originalFetch = window.fetch.bind(window);
       window.fetch = (...args) => { window.cardRequests += 1; return originalFetch(...args); };
     JS
-    [ "思い出・活動履歴重視", "データ可視化重視" ].each do |name|
+    [ "データ可視化重視" ].each do |name|
       choose name, exact: true
       within("[data-photo-card-target='panel']:not([hidden])") do
         expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
@@ -494,7 +495,7 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     choose "データ可視化重視", exact: true
     expect(page).to have_css("#card-settings-data", text: "PNG生成は未実装")
     choose "思い出・活動履歴重視", exact: true
-    expect(page).to have_css("#card-settings-memories", text: "PNG生成は未実装")
+    expect(page).to have_css("#card-settings-memories", text: "掲載できる活動記録がありません")
     choose "ビジュアル重視", exact: true
     expect(page).to have_button("プレビューを作成", disabled: true)
     check_invalidated_preview
@@ -510,17 +511,18 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     uncheck "保存済みの自己紹介を表示する"
     generate_preview
     choose "思い出・活動履歴重視", exact: true
-    uncheck "保存済みの自己紹介を表示する"
+    expect(page).not_to have_field("保存済みの自己紹介を表示する")
     choose "データ可視化重視", exact: true
     uncheck "保存済みの自己紹介を表示する"
     open_card
     expect(page).to have_checked_field("ビジュアル重視", exact: true)
     expect(page).to have_checked_field("保存済みの自己紹介を表示する")
     check_invalidated_preview
-    [ "思い出・活動履歴重視", "データ可視化重視" ].each do |name|
-      choose name, exact: true
-      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
-    end
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_text("掲載できる活動記録がありません")
+    expect(page).not_to have_field("保存済みの自己紹介を表示する")
+    choose "データ可視化重視", exact: true
+    expect(page).to have_checked_field("保存済みの自己紹介を表示する")
     expect(profile.reload.attributes).to eq(original)
   end
 
@@ -539,12 +541,13 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
 
   it "discards every template's settings and preview after thirty minutes of inactivity" do
     create(:profile, user: user)
+    memory = create(:activity, user: user, occurred_on: Date.current)
     sign_in
     open_card
     uncheck "保存済みの自己紹介を表示する"
     generate_preview
     choose "思い出・活動履歴重視", exact: true
-    uncheck "保存済みの自己紹介を表示する"
+    expect(page).to have_select("1. 掲載する活動", selected: memory_choice(memory))
     choose "データ可視化重視", exact: true
     uncheck "保存済みの自己紹介を表示する"
     page.execute_script("const originalNow = Date.now; Date.now = () => originalNow() + 30 * 60 * 1000;")
@@ -553,8 +556,9 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     expect(page).to have_checked_field("ビジュアル重視", disabled: true, exact: true)
     expect(page).to have_button("プレビューを作成", disabled: true)
     expect(page).not_to have_css("[data-frame-source]", visible: :all)
-    expect(page.all("input[name='show_introduction']", visible: :all).map(&:checked?)).to eq([ true, true, true ])
-    expect(page.all("input[name='show_introduction']", visible: :all).map(&:disabled?)).to eq([ true, true, true ])
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:checked?)).to eq([ true, true ])
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:disabled?)).to eq([ true, true ])
+    expect(page).to have_css("[data-photo-card-target='memoryFrames']:empty", visible: :all)
     open_card
     expect(page).to have_checked_field("ビジュアル重視", disabled: false, exact: true)
     expect(page).to have_button("プレビューを作成", disabled: false)
@@ -685,5 +689,252 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     check_changed_settings
     generate_preview
     download_png
+  end
+  def memory_choice(activity)
+    "#{activity.occurred_on.strftime('%Y.%m.%d')} #{activity.title}"
+  end
+
+  def open_memory_crop(activity)
+    find("[data-memory-crop][data-activity-id='#{activity.id}']").click
+    expect(page).to have_css("dialog[open]")
+    expect(page).to have_button("この範囲で確定", disabled: false, wait: 10)
+  end
+
+  def attach_memory_photo(activity, **options)
+    bytes = coordinate_image(**options)
+    activity.images.attach(io: StringIO.new(bytes), filename: options[:orientation] ? "oriented.jpg" : "coordinates.png")
+    bytes
+  end
+
+  it "initially selects the latest three eligible activities, supports replacing and reordering, and restores template state" do
+    create(:profile, user: user)
+    timestamp = Time.current.change(usec: 0)
+    old = create(:activity, user: user, occurred_on: Date.current - 1)
+    first = create(:activity, user: user, occurred_on: Date.current, created_at: timestamp)
+    second = create(:activity, user: user, occurred_on: Date.current, created_at: timestamp)
+    newest = create(:activity, user: user, occurred_on: Date.current, created_at: timestamp + 1)
+    future = create(:activity, user: user, occurred_on: Date.current + 1)
+    foreign = create(:activity, occurred_on: Date.current)
+    sign_in
+    open_card
+    choose "思い出・活動履歴重視", exact: true
+    [ newest, second, first ].each_with_index do |activity, index|
+      expect(page).to have_select("#{index + 1}. 掲載する活動", selected: memory_choice(activity))
+    end
+    expect(page).not_to have_select("4. 掲載する活動")
+    expect(find("#memory-activity-#{newest.id}").all("option").map(&:text)).not_to include(memory_choice(future), memory_choice(foreign))
+    select memory_choice(old), from: "3. 掲載する活動"
+    find("[data-memory-up][data-activity-id='#{old.id}']").send_keys(:enter)
+    expect(page).to have_select("2. 掲載する活動", selected: memory_choice(old))
+    generate_preview
+    choose "データ可視化重視", exact: true
+    check_invalidated_preview
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_select("2. 掲載する活動", selected: memory_choice(old))
+    expect(page).to have_select("3. 掲載する活動", selected: memory_choice(second))
+    generate_preview
+    # An unchanged selection event leaves the completed preview intact.
+    url = find("[data-photo-card-target='image']")["src"]
+    find("#memory-activity-#{old.id}").execute_script("this.dispatchEvent(new Event('change', {bubbles:true}))")
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    find("[data-memory-remove][data-activity-id='#{old.id}']").click
+    check_invalidated_preview
+    expect(page).not_to have_select("3. 掲載する活動")
+    generate_preview
+    find("[data-memory-remove][data-activity-id='#{second.id}']").click
+    generate_preview
+    download_png
+  end
+
+  it "keeps per-activity photos and crops through reordering and template changes, resets only a changed photo and matches the cropped PNG" do
+    create(:profile, user: user)
+    first = create(:activity, user: user, occurred_on: Date.current)
+    original = attach_memory_photo(first, orientation: 6)
+    attach_memory_photo(first)
+    second = create(:activity, user: user, occurred_on: Date.current - 1)
+    attach_memory_photo(second)
+    sign_in
+    open_card
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_select("1. 活動の写真", selected: "写真1")
+    generate_preview
+    url = find("[data-photo-card-target='image']")["src"]
+    open_memory_crop(first)
+    zoom_to_maximum
+    click_button "キャンセル"
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("1")
+    click_button "この範囲で確定"
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    open_memory_crop(first)
+    zoom_to_maximum
+    viewport = find("[data-image-crop-target='viewport']")
+    viewport.execute_script("this.scrollIntoView({block: 'center'})")
+    page.driver.browser.action.move_to(viewport.native).click_and_hold.move_by(35, 20).release.perform
+    colour = page.evaluate_script(<<~JS)
+      (() => {
+        const photo = document.querySelector('[data-image-crop-target="photo"]');
+        const viewport = document.querySelector('[data-image-crop-target="viewport"]').getBoundingClientRect();
+        const bounds = photo.getBoundingClientRect();
+        const canvas = document.createElement('canvas'); canvas.width = photo.naturalWidth; canvas.height = photo.naturalHeight;
+        const context = canvas.getContext('2d'); context.drawImage(photo,0,0);
+        const x = (viewport.left + viewport.width/2 - bounds.left)*photo.naturalWidth/bounds.width;
+        const y = (viewport.top + viewport.height/2 - bounds.top)*photo.naturalHeight/bounds.height;
+        return Array.from(context.getImageData(Math.floor(x),Math.floor(y),1,1).data).slice(0,3);
+      })()
+    JS
+    click_button "この範囲で確定"
+    check_invalidated_preview
+    generate_preview
+    png = preview_png
+    pixel = Vips::Image.new_from_buffer(png, "").getpoint(552, 414).take(3)
+    pixel.zip(colour).each { |actual, expected| expect(actual).to be_within(2).of(expected) }
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("3")
+    click_button "キャンセル"
+    find("[data-memory-down][data-activity-id='#{first.id}']").click
+    choose "ビジュアル重視", exact: true
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_select("2. 掲載する活動", selected: memory_choice(first))
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("3")
+    click_button "リセット"
+    click_button "キャンセル"
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("3")
+    click_button "キャンセル"
+    select "写真2", from: "2. 活動の写真"
+    open_memory_crop(first)
+    expect(find("#image-crop-zoom").value).to eq("1")
+    click_button "キャンセル"
+    generate_preview
+    png = preview_png
+    download_png
+    expect(File.binread(@download_directory.join("oshilog-card.png"))).to eq(png)
+    expect(first.images_attachments.order(:id).first.blob.download).to eq(original)
+    expect(@download_directory.children.map(&:basename).map(&:to_s)).to eq([ "oshilog-card.png" ])
+  end
+
+  it "distinguishes no activity, no photo and an unreadable photo, and retries a failed candidate request" do
+    create(:profile, user: user)
+    create(:activity, user: user, occurred_on: Date.current + 1)
+    sign_in
+    open_card
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_text("掲載できる活動記録がありません")
+    expect(page).to have_link("活動を登録", href: new_activity_path)
+    expect(page).to have_button("プレビューを作成", disabled: true)
+    activity = create(:activity, user: user, occurred_on: Date.current)
+    visit new_card_path
+    page.execute_script(<<~JS)
+      const original = window.fetch.bind(window); let failed = false;
+      window.fetch = (...args) => {
+        if (args[0] === #{memories_card_path.to_json} && !failed) { failed = true; return Promise.reject(new TypeError('offline')); }
+        return original(...args);
+      };
+    JS
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_text("活動記録を取得できません")
+    click_button "活動記録を再読み込み"
+    expect(page).to have_select("1. 活動の写真", selected: "写真なし（代替表示）", disabled: true)
+    expect(page).to have_button("画像を調整", disabled: true)
+    generate_preview
+    attach_memory_photo(activity)
+    blob = activity.images.first.blob
+    File.unlink(blob.service.path_for(blob.key))
+    visit new_card_path
+    choose "思い出・活動履歴重視", exact: true
+    find("[data-memory-crop][data-activity-id='#{activity.id}']").click
+    expect(page).to have_css("dialog [role='alert']", text: "登録画像を読み取れません")
+    expect(page).to have_button("この範囲で確定", disabled: true)
+    click_button "キャンセル"
+    click_button "プレビューを作成"
+    expect(page).to have_css("[data-photo-card-target='error']", text: "未登録とは異なる状態", wait: 10)
+    check_invalidated_preview
+  end
+
+  it "retains memory settings at fifteen minutes but clears drafts and selections on inactivity or navigation" do
+    create(:profile, user: user)
+    activity = create(:activity, user: user, occurred_on: Date.current)
+    attach_memory_photo(activity)
+    sign_in
+    open_card
+    choose "思い出・活動履歴重視", exact: true
+    open_memory_crop(activity)
+    zoom_to_maximum
+    click_button "この範囲で確定"
+    generate_preview
+    page.execute_script("window.originalMemoryNow = Date.now; Date.now = () => window.originalMemoryNow() + 15*60*1000")
+    expect(page).to have_css("[data-photo-card-target='status']", text: "プレビューの期限が切れました", wait: 5)
+    check_invalidated_preview
+    open_memory_crop(activity)
+    expect(find("#image-crop-zoom").value).to eq("3")
+    click_button "キャンセル"
+    page.execute_script("Date.now = window.originalMemoryNow")
+    generate_preview
+    open_memory_crop(activity)
+    page.execute_script("Date.now = () => window.originalMemoryNow() + 31*60*1000")
+    expect(page).to have_css("[data-photo-card-target='status']", text: "30分間操作がなかった", wait: 5)
+    expect(page).not_to have_css("dialog[open]")
+    expect(page).not_to have_css("[data-memory-activity]", visible: :all)
+    expect(page).to have_css("[data-photo-card-target='memoryFrames']:empty", visible: :all)
+    visit new_card_path
+    choose "思い出・活動履歴重視", exact: true
+    open_memory_crop(activity)
+    expect(find("#image-crop-zoom").value).to eq("1")
+    zoom_to_maximum
+    # Programmatic switches also discard the unfinished modal draft.
+    page.execute_script("const radio=document.querySelector('input[value=photo]');radio.checked=true;radio.dispatchEvent(new Event('change',{bubbles:true}))")
+    expect(page).not_to have_css("dialog[open]")
+    choose "思い出・活動履歴重視", exact: true
+    open_memory_crop(activity)
+    expect(find("#image-crop-zoom").value).to eq("1")
+    click_button "キャンセル"
+  end
+
+  it "discards a held memory generation response after switching templates and keeps a newer preview" do
+    create(:profile, user: user)
+    create(:activity, user: user, occurred_on: Date.current)
+    sign_in
+    open_card
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_button("プレビューを作成", disabled: false)
+    page.execute_script(<<~JS)
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (args[0] === #{card_path.to_json} && !window.memoryHeld) {
+          window.memoryHeld = true;
+          const blob = await response.blob();
+          await new Promise(resolve => { window.releaseMemory = resolve; });
+          window.releasingMemory = true;
+          return new Response(blob, {status:response.status, headers:response.headers});
+        }
+        return response;
+      };
+      const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest = (...args) => originalDigest(...args).then(digest => {
+        if (window.releasingMemory) setTimeout(() => { window.oldMemoryProcessed = true; },0);
+        return digest;
+      });
+    JS
+    click_button "プレビューを作成"
+    page.document.synchronize(10, errors: [ Capybara::ExpectationNotMet ]) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("typeof window.releaseMemory === 'function'")
+    end
+    choose "ビジュアル重視", exact: true
+    generate_preview
+    png = preview_png
+    url = find("[data-photo-card-target='image']")["src"]
+    page.execute_script("window.releaseMemory()")
+    page.document.synchronize(10, errors: [ Capybara::ExpectationNotMet ]) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("window.oldMemoryProcessed === true")
+    end
+    expect(find("[data-photo-card-target='image']")["src"]).to eq(url)
+    expect(preview_png).to eq(png)
+    choose "思い出・活動履歴重視", exact: true
+    check_invalidated_preview
+    generate_preview
   end
 end

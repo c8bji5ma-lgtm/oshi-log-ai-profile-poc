@@ -19,6 +19,64 @@
 
 .photo-card-frame-settings select {
   width: 100%;
+  margin-block-end: 0.75rem;
+}
+
+.image-crop-dialog {
+  width: min(100% - 1rem, 36rem);
+  max-height: calc(100dvh - 1rem);
+  padding: 1.25rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #d5dee8;
+  border-radius: 0.5rem;
+  color: #243447;
+  background: #fff;
+}
+
+.image-crop-dialog::backdrop {
+  background: rgb(36 52 71 / 65%);
+}
+
+html:has(.image-crop-dialog[open]) {
+  overflow: hidden;
+}
+
+.image-crop-viewport {
+  position: relative;
+  width: min(100%, 18rem, 34dvh);
+  aspect-ratio: 4 / 5;
+  margin-inline: auto;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  background: #edf4fa;
+  cursor: grab;
+}
+
+.image-crop-viewport:active {
+  cursor: grabbing;
+}
+
+.image-crop-viewport img {
+  position: absolute;
+  max-width: none;
+  visibility: hidden;
+  pointer-events: none;
+  image-orientation: from-image;
+}
+
+.image-crop-dialog input[type="range"] {
+  padding: 0;
+  accent-color: #245b8a;
+}
+
+.image-crop-dialog button {
+  font: inherit;
+}
+
+.image-crop-actions {
+  margin-block-start: 1rem;
 }
 
 [data-controller="photo-card"] [role="alert"] {
@@ -27,5 +85,94 @@
 
 [data-controller="photo-card"] button:disabled {
   opacity: 0.6;
-  cursor: wait;
+  cursor: not-allowed;
+}
+
+[data-controller="photo-card"] [hidden] {
+  display: none;
+}
+
+.card-template-editor {
+  display: grid;
+  gap: 1rem;
+}
+
+.card-template-choices {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.card-template-choice {
+  padding: 0.75rem;
+  border-radius: 0.25rem;
+}
+
+.card-template-choice label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.card-template-choice:has(input:checked) {
+  background: #edf4fa;
+}
+
+.card-template-choice input {
+  flex-shrink: 0;
+  accent-color: #245b8a;
+}
+
+.card-template-description {
+  display: block;
+  margin-inline-start: 1.75rem;
+}
+
+.card-setting-toggle,
+.photo-card-choices label,
+[data-controller="photo-card"] label:has(input[name="show_introduction"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
+.memory-card-frames {
+  display: grid;
+  gap: 1.5rem;
+  margin-block: 1rem 1.5rem;
+}
+
+.memory-card-frame {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #d5dee8;
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-card-frame select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+.memory-card-frame .actions {
+  flex-wrap: wrap;
+}
+
+.memory-card-frame button {
+  min-height: 44px;
+  font: inherit;
+}
+
+.data-card-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 1rem;
+}
+
+.data-card-settings .form-field {
+  min-width: 0;
 }

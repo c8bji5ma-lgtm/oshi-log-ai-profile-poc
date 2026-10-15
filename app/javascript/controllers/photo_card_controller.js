@@ -1,23 +1,314 @@
 import { Controller } from "@hotwired/stimulus"
+import { defaultCrop } from "lib/crop_geometry"
 
 export default class extends Controller {
-  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate"]
-  static values = { createUrl: String, downloadUrl: String }
+  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm", "cropDialog", "memoryStatus", "memoryRetry", "memoryEmpty", "memoryFrames", "memoryFrameTemplate", "memoryAdd", "dataYear", "dataOshi", "dataStatus", "dataRetry"]
+  static values = { createUrl: String, downloadUrl: String, layouts: Object, memoriesUrl: String, statisticsUrl: String }
 
   connect() {
     this.sequence = (this.sequence || 0) + 1
     this.disposed = false
+    this.generating = false
     this.lastAction = Date.now()
+    this.template = "photo"
+    this.settingsFormTargets.forEach(form => {
+      form.reset()
+      form.querySelectorAll("input, select").forEach(input => { input.disabled = false })
+    })
     this.selectedIds = this.oshiTargets.filter(input => input.checked).map(input => input.value)
     this.imageSources = new Map(this.selectedIds.map(id => [id, id]))
+    this.crops = new Map()
+    this.memories = null
+    this.memoryIds = []
+    this.memoryEdits = new Map()
+    this.dataSettings = null
+    this.dataYearTarget.disabled = true
+    this.dataOshiTarget.disabled = true
     this.renderFrames()
+    this.renderPanels()
     this.timer = setInterval(() => this.checkExpiry(), 1000)
   }
 
   disconnect() { this.dispose() }
 
+  switchTemplate(event) {
+    if (this.disposed || !this.checkExpiry()) return
+    this.lastAction = Date.now()
+    this.closeCrop()
+    this.template = event.target.value
+    this.invalidate()
+    this.renderPanels()
+    if (this.template === "memories" && !this.memories) this.loadMemories()
+    if (this.template === "data" && !this.dataSettings) this.loadStatistics()
+    this.errorTarget.textContent = ""
+    this.statusTarget.textContent = "テンプレートを切り替えました。プレビューを作成してください。"
+  }
+
+  renderPanels() {
+    this.panelTargets.forEach(panel => { panel.hidden = panel.dataset.template !== this.template })
+  }
+
+  get canGenerate() {
+    return !this.disposed && (this.template === "photo" ? this.selectedIds?.length > 0 :
+      (this.template === "memories" ? this.memoryIds?.length > 0 : this.template === "data" && Boolean(this.dataSettings)))
+  }
+
+  updateGenerateButtons(busy = this.generating) {
+    this.generateButtonTargets.forEach(button => {
+      button.disabled = busy || !this.canGenerate || button.closest("[data-template]").dataset.template !== this.template
+    })
+  }
+
+  async loadStatistics() {
+    if (this.disposed || !this.checkExpiry() || this.dataLoad || this.dataSettings) return
+    this.lastAction = Date.now()
+    const operation = new AbortController()
+    this.dataLoad = operation
+    this.dataRetryTarget.hidden = true
+    this.dataStatusTarget.textContent = "年と集計対象を読み込んでいます。"
+    try {
+      const response = await fetch(this.statisticsUrlValue, { credentials: "same-origin", signal: operation.signal,
+        headers: { Accept: "application/json" } })
+      if (!response.ok) throw new Error(await this.errorMessage(response))
+      const options = await response.json()
+      if (this.disposed || this.dataLoad !== operation || !this.checkExpiry()) return
+      this.dataYearTarget.replaceChildren(...options.years.map(year => new Option(`${year}年`, year)))
+      this.dataOshiTarget.replaceChildren(new Option("すべての推し", ""), ...options.oshis.map(oshi => new Option(oshi.name, oshi.id)))
+      this.dataSettings = { year: options.year, oshi_id: "" }
+      this.dataYearTarget.value = options.year
+      this.dataOshiTarget.value = ""
+      this.dataYearTarget.disabled = false
+      this.dataOshiTarget.disabled = false
+      this.dataStatusTarget.textContent = options.oshis.length ? "年と集計対象を選択できます。" : "推しの登録がなくても全体のカードを作成できます。"
+      this.updateGenerateButtons()
+    } catch (error) {
+      if (!this.disposed && this.dataLoad === operation && error.name !== "AbortError") {
+        this.dataStatusTarget.textContent = `選択肢を取得できません。${error.message}`
+        this.dataRetryTarget.hidden = false
+      }
+    } finally {
+      if (this.dataLoad === operation) this.dataLoad = null
+    }
+  }
+
+  changeStatistics() {
+    if (this.disposed || !this.checkExpiry() || this.template !== "data" || !this.dataSettings) return
+    this.lastAction = Date.now()
+    const next = { year: this.dataYearTarget.value, oshi_id: this.dataOshiTarget.value }
+    if (next.year === this.dataSettings.year && next.oshi_id === this.dataSettings.oshi_id) return
+    this.dataSettings = next
+    this.invalidate()
+    this.errorTarget.textContent = ""
+    this.statusTarget.textContent = "設定を変更しました。プレビューを作成してください。"
+  }
+
+  async loadMemories() {
+    if (this.disposed || !this.checkExpiry() || this.memoryLoad || this.memories) return
+    this.lastAction = Date.now()
+    const operation = new AbortController()
+    this.memoryLoad = operation
+    this.memoryRetryTarget.hidden = true
+    this.memoryStatusTarget.textContent = "活動記録を読み込んでいます。"
+    try {
+      const response = await fetch(this.memoriesUrlValue, { credentials: "same-origin", signal: operation.signal,
+        headers: { Accept: "application/json" } })
+      if (!response.ok) throw new Error(await this.errorMessage(response))
+      const { activities } = await response.json()
+      if (this.disposed || this.memoryLoad !== operation || !this.checkExpiry()) return
+      this.memories = activities
+      this.memoryIds = activities.slice(0, 3).map(activity => activity.id)
+      this.memoryIds.forEach(id => this.initializeMemory(id))
+      this.memoryStatusTarget.textContent = activities.length ? "最新の活動を選択しました。掲載順と写真を変更できます。" : ""
+      this.memoryEmptyTarget.hidden = activities.length > 0
+      this.renderMemoryFrames()
+    } catch (error) {
+      if (!this.disposed && this.memoryLoad === operation && error.name !== "AbortError") {
+        this.memoryStatusTarget.textContent = `活動記録を取得できません。${error.message}`
+        this.memoryRetryTarget.hidden = false
+      }
+    } finally {
+      if (this.memoryLoad === operation) this.memoryLoad = null
+    }
+  }
+
+  initializeMemory(id) {
+    const activity = this.memories.find(item => item.id === id)
+    this.memoryEdits.set(id, { imageId: activity.images[0]?.id || "", crop: defaultCrop() })
+  }
+
+  memoryAction() {
+    if (this.disposed || !this.checkExpiry() || this.template !== "memories") return false
+    this.lastAction = Date.now()
+    return true
+  }
+
+  memoryChanged() {
+    this.closeCrop()
+    this.invalidate()
+    this.errorTarget.textContent = ""
+    this.statusTarget.textContent = "設定を変更しました。プレビューを作成してください。"
+  }
+
+  addMemory() {
+    if (!this.memoryAction() || !this.memories || this.memoryIds.length >= 3) return
+    const next = this.memories.find(item => !this.memoryIds.includes(item.id))
+    if (!next) return
+    this.memoryIds.push(next.id)
+    this.initializeMemory(next.id)
+    this.memoryChanged()
+    this.renderMemoryFrames()
+    this.memoryFramesTarget.lastElementChild.querySelector("select").focus()
+  }
+
+  removeMemory(event) {
+    if (!this.memoryAction()) return
+    const id = event.currentTarget.dataset.activityId
+    this.memoryIds = this.memoryIds.filter(item => item !== id)
+    this.memoryEdits.delete(id)
+    this.memoryChanged()
+    this.renderMemoryFrames()
+    this.memoryAddTarget.focus()
+  }
+
+  changeMemory(event) {
+    if (!this.memoryAction()) return
+    const old = event.target.dataset.activityId
+    const id = event.target.value
+    if (old === id) return
+    if (this.memoryIds.includes(id)) { event.target.value = old; return }
+    this.memoryIds[this.memoryIds.indexOf(old)] = id
+    this.memoryEdits.delete(old)
+    this.initializeMemory(id)
+    this.memoryChanged()
+    this.renderMemoryFrames()
+    this.memoryFramesTarget.querySelector(`[data-memory-activity][data-activity-id="${id}"]`).focus()
+  }
+
+  moveMemory(event) {
+    if (!this.memoryAction()) return
+    const id = event.currentTarget.dataset.activityId
+    const from = this.memoryIds.indexOf(id)
+    const to = from + Number(event.currentTarget.dataset.direction)
+    if (from < 0 || to < 0 || to >= this.memoryIds.length) return
+    ;[this.memoryIds[from], this.memoryIds[to]] = [this.memoryIds[to], this.memoryIds[from]]
+    this.memoryChanged()
+    this.renderMemoryFrames()
+    this.memoryFramesTarget.querySelector(`[data-memory-activity][data-activity-id="${id}"]`).focus()
+  }
+
+  changeMemoryPhoto(event) {
+    if (!this.memoryAction()) return
+    const edit = this.memoryEdits.get(event.target.dataset.activityId)
+    if (edit.imageId === event.target.value) return
+    edit.imageId = event.target.value
+    edit.crop = defaultCrop()
+    this.memoryChanged()
+  }
+
+  renderMemoryFrames() {
+    const rows = this.memoryIds.map((id, index) => {
+      const activity = this.memories.find(item => item.id === id)
+      const row = this.memoryFrameTemplateTarget.content.firstElementChild.cloneNode(true)
+      row.dataset.activityId = id
+      row.querySelector("[data-memory-heading]").textContent = `掲載位置 ${index + 1}（左から）`
+      const select = row.querySelector("[data-memory-activity]")
+      select.id = `memory-activity-${id}`
+      const label = row.querySelector("[data-memory-activity-label]")
+      label.htmlFor = select.id
+      label.textContent = `${index + 1}. 掲載する活動`
+      this.memories.forEach(item => {
+        const option = new Option(`${item.date} ${item.title}`, item.id)
+        option.disabled = item.id !== id && this.memoryIds.includes(item.id)
+        select.add(option)
+      })
+      select.value = id
+      row.querySelector("[data-memory-details]").textContent = `${activity.category} / ${activity.oshis.join("・")}`
+      const photos = row.querySelector("[data-memory-photo]")
+      photos.id = `memory-photo-${id}`
+      const photoLabel = row.querySelector("[data-memory-photo-label]")
+      photoLabel.htmlFor = photos.id
+      photoLabel.textContent = `${index + 1}. 活動の写真`
+      activity.images.forEach((image, n) => photos.add(new Option(`写真${n + 1}`, image.id)))
+      if (!activity.images.length) photos.add(new Option("写真なし（代替表示）", ""))
+      photos.value = this.memoryEdits.get(id).imageId
+      photos.disabled = !activity.images.length
+      row.querySelector("[data-memory-crop]").disabled = !activity.images.length
+      row.querySelectorAll("button, select").forEach(input => { input.dataset.activityId = id })
+      const up = row.querySelector("[data-memory-up]")
+      up.dataset.direction = "-1"
+      up.disabled = index === 0
+      const down = row.querySelector("[data-memory-down]")
+      down.dataset.direction = "1"
+      down.disabled = index === this.memoryIds.length - 1
+      return row
+    })
+    this.memoryFramesTarget.replaceChildren(...rows)
+    this.memoryAddTarget.disabled = this.memoryIds.length >= 3 || this.memoryIds.length >= this.memories.length
+    this.updateGenerateButtons()
+  }
+
+  editMemoryCrop(event) {
+    if (!this.memoryAction()) return
+    const id = event.currentTarget.dataset.activityId
+    const edit = this.memoryEdits.get(id)
+    const activity = this.memories.find(item => item.id === id)
+    const image = activity.images.find(item => item.id === edit.imageId)
+    if (!image) return
+    this.cropDialogTarget.dispatchEvent(new CustomEvent("crop:open", { detail: {
+      frameId: `memory-${id}`, sourceId: image.id, src: image.url, opener: event.currentTarget,
+      crop: edit.crop, width: 424, height: 400
+    } }))
+  }
+
+  confirmMemoryCrop(event) {
+    if (!this.memoryAction()) return
+    const { frameId, sourceId, crop } = event.detail
+    const id = frameId.slice(7)
+    const edit = this.memoryEdits.get(id)
+    if (!this.memoryIds.includes(id) || edit?.imageId !== sourceId) return
+    if (["x", "y", "zoom"].every(key => Math.abs(edit.crop[key] - crop[key]) <= 1e-9)) return
+    edit.crop = crop
+    this.invalidate()
+    this.statusTarget.textContent = "画像の調整範囲を変更しました。プレビューを作成してください。"
+  }
+
+  cropActivity() {
+    if (!this.disposed && this.checkExpiry()) this.lastAction = Date.now()
+  }
+
+  closeCrop() { this.cropDialogTarget.dispatchEvent(new Event("crop:cancel")) }
+
+  editCrop(event) {
+    if (this.disposed || !this.checkExpiry() || this.template !== "photo") return
+    this.lastAction = Date.now()
+    const frameId = event.currentTarget.dataset.cropFor
+    const sourceId = this.imageSources.get(frameId)
+    const source = this.oshiTargets.find(input => input.value === sourceId)
+    if (!source?.dataset.imageUrl) return
+    this.cropDialogTarget.dispatchEvent(new CustomEvent("crop:open", { detail: {
+      frameId, sourceId, src: source.dataset.imageUrl, opener: event.currentTarget,
+      crop: this.crops.get(frameId) || defaultCrop(), ...this.layoutsValue[this.selectedIds.length]
+    } }))
+  }
+
+  confirmCrop(event) {
+    if (event.detail.frameId.startsWith("memory-")) {
+      this.confirmMemoryCrop(event)
+      return
+    }
+    if (this.disposed || !this.checkExpiry() || this.template !== "photo") return
+    const { frameId, sourceId, crop } = event.detail
+    if (!this.selectedIds.includes(frameId) || this.imageSources.get(frameId) !== sourceId) return
+    const old = this.crops.get(frameId) || defaultCrop()
+    if (["x", "y", "zoom"].every(key => Math.abs(old[key] - crop[key]) <= 1e-9)) return
+    this.crops.set(frameId, crop)
+    this.invalidate()
+    this.statusTarget.textContent = "画像の調整範囲を変更しました。プレビューを作成してください。"
+  }
+
   selectOshi(event) {
     if (this.disposed || !this.checkExpiry()) return
+    this.closeCrop()
     const input = event.target
     this.lastAction = Date.now()
     if (input.checked) {
@@ -32,9 +323,13 @@ export default class extends Controller {
     } else {
       this.selectedIds = this.selectedIds.filter(id => id !== input.value)
       this.imageSources.delete(input.value)
+      this.crops.delete(input.value)
       for (const id of this.selectedIds) {
         const source = this.imageSources.get(id)
-        if (source && !this.selectedIds.includes(source)) this.imageSources.set(id, id)
+        if (source && !this.selectedIds.includes(source)) {
+          this.imageSources.set(id, id)
+          this.crops.delete(id)
+        }
       }
     }
     this.renderFrames()
@@ -53,25 +348,39 @@ export default class extends Controller {
       source.add(new Option("画像を表示しない", ""))
       for (const candidate of this.selectedIds) source.add(new Option(`${names.get(candidate)}の代表画像`, candidate))
       source.value = this.imageSources.get(id) || ""
+      const adjust = row.querySelector("[data-crop-for]")
+      adjust.dataset.cropFor = id
+      adjust.setAttribute("aria-label", `${index + 1}. ${names.get(id)}の画像を調整`)
+      const imageOwner = this.oshiTargets.find(input => input.value === this.imageSources.get(id))
+      adjust.disabled = !imageOwner?.dataset.imageUrl
       return row
     })
     this.framesTarget.replaceChildren(...rows)
-    this.generateButtonTarget.disabled = this.selectedIds.length === 0
+    this.updateGenerateButtons()
   }
 
   changed(event) {
     if (this.disposed || !this.checkExpiry()) return
     this.lastAction = Date.now()
     const id = event.target.dataset.imageFor
-    if (id) this.imageSources.set(id, event.target.value)
+    if (id) {
+      this.closeCrop()
+      this.imageSources.set(id, event.target.value)
+      this.crops.delete(id)
+      const owner = this.oshiTargets.find(input => input.value === event.target.value)
+      event.target.closest(".form-field").querySelector("[data-crop-for]").disabled = !owner?.dataset.imageUrl
+    }
     this.invalidate()
     this.errorTarget.textContent = ""
-    this.statusTarget.textContent = "設定を変更しました。プレビューを作成してください。"
+    this.statusTarget.textContent = this.template === "photo"
+      ? "設定を変更しました。プレビューを作成してください。"
+      : "設定を変更しました。このテンプレートのPNG生成は未実装です。"
   }
 
   async generate(event) {
     event.preventDefault()
     if (this.disposed || !this.checkExpiry()) return
+    if (!this.canGenerate) return
     this.lastAction = Date.now()
     this.invalidate()
     const sequence = this.sequence
@@ -79,16 +388,23 @@ export default class extends Controller {
     this.operation = operation
     this.errorTarget.textContent = ""
     this.statusTarget.textContent = "カードを作成しています。"
-    this.generateButtonTarget.disabled = true
+    this.generating = true
+    this.updateGenerateButtons(true)
     try {
-      const form = this.formTarget.elements
       const response = await fetch(this.createUrlValue, {
         method: "POST", credentials: "same-origin", signal: operation.signal,
         headers: { "Content-Type": "application/json", "X-CSRF-Token": this.csrfToken },
-        body: JSON.stringify({ card: {
-          user_oshi_ids: this.selectedIds,
+        body: JSON.stringify({ card: this.template === "data" ? {
+          template: "data", ...this.dataSettings
+        } : this.template === "memories" ? {
+          template: "memory", activity_ids: this.memoryIds,
+          image_attachment_ids: this.memoryIds.map(id => this.memoryEdits.get(id).imageId),
+          crops: this.memoryIds.map(id => this.memoryEdits.get(id).crop)
+        } : {
+          template: "photo", user_oshi_ids: this.selectedIds,
           image_user_oshi_ids: this.selectedIds.map(id => this.imageSources.get(id)),
-          show_introduction: form.show_introduction.checked
+          crops: this.selectedIds.map(id => this.crops.get(id) || defaultCrop()),
+          show_introduction: this.formTarget.elements.show_introduction.checked
         } })
       })
       if (!response.ok) throw new Error(await this.errorMessage(response))
@@ -111,7 +427,10 @@ export default class extends Controller {
         this.statusTarget.textContent = ""
       }
     } finally {
-      if (this.current(sequence)) this.generateButtonTarget.disabled = this.selectedIds.length === 0
+      if (this.current(sequence)) {
+        this.generating = false
+        this.updateGenerateButtons()
+      }
     }
   }
 
@@ -177,25 +496,49 @@ export default class extends Controller {
 
   invalidate() {
     this.sequence += 1
+    this.generating = false
     this.operation?.abort()
     if (this.url) URL.revokeObjectURL(this.url)
     this.url = null
     this.result = null
     this.imageTarget.removeAttribute("src")
     this.previewTarget.hidden = true
-    this.generateButtonTarget.disabled = !this.selectedIds?.length
+    this.updateGenerateButtons()
     this.downloadButtonTarget.disabled = true
   }
 
   dispose() {
     this.disposed = true
     clearInterval(this.timer)
+    this.closeCrop()
     this.invalidate()
-    this.formTarget.reset()
+    this.settingsFormTargets.forEach(form => {
+      form.reset()
+      for (const input of form.elements) input.disabled = true
+    })
+    this.template = "photo"
+    this.renderPanels()
     this.selectedIds = []
     this.imageSources?.clear()
+    this.crops?.clear()
+    this.dataLoad?.abort()
+    this.dataLoad = null
+    this.dataSettings = null
+    this.dataYearTarget.replaceChildren()
+    this.dataOshiTarget.replaceChildren()
+    this.dataRetryTarget.hidden = true
+    this.dataStatusTarget.textContent = ""
+    this.memoryLoad?.abort()
+    this.memoryLoad = null
+    this.memories = null
+    this.memoryIds = []
+    this.memoryEdits?.clear()
+    this.memoryFramesTarget.replaceChildren()
+    this.memoryAddTarget.disabled = true
+    this.memoryRetryTarget.hidden = true
+    this.memoryStatusTarget.textContent = ""
     this.framesTarget.replaceChildren()
-    this.generateButtonTarget.disabled = true
+    this.updateGenerateButtons(true)
   }
 
   current(sequence) { return !this.disposed && this.sequence === sequence }

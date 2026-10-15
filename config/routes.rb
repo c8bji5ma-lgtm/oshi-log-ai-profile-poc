@@ -29,6 +29,8 @@ Rails.application.routes.draw do
   get "data", to: "oshi_data#show", as: :oshi_data
   resource :profile, only: [ :edit, :update ]
   resource :card, only: [ :new, :create ] do
+    get :memories
+    get :statistics
     post :download
   end
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html

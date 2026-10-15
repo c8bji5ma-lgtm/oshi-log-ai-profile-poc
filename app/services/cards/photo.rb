@@ -23,7 +23,7 @@ module Cards
     class FontUnavailable < StandardError; end
     class ProfileRequired < StandardError; end
 
-    def initialize(user:, user_oshi_ids:, image_user_oshi_ids:, show_introduction: true)
+    def initialize(user:, user_oshi_ids:, image_user_oshi_ids:, show_introduction: true, crops: nil)
       @profile = Profile.find_by(user_id: user.id) || raise(ProfileRequired)
       records = user.user_oshis.includes(:oshi, representative_image_attachment: :blob)
         .where(id: user_oshi_ids).index_by { |record| record.id.to_s }
@@ -34,9 +34,12 @@ module Cards
       end
       @image_bytes = {}
       @show_introduction = show_introduction
+      raise Crop::Invalid unless crops.nil? || (crops.is_a?(Array) && crops.length == @user_oshis.length)
+      @crops = (crops || Array.new(@user_oshis.length, Crop::DEFAULT)).map { |crop| Crop.normalize(crop) }
     end
 
     def fingerprint
+      validate_crops!
       Digest::SHA256.hexdigest(JSON.generate([
         @profile.id, @profile.display_name, @profile.updated_at.iso8601(6),
         (@profile.introduction if @show_introduction),
@@ -52,7 +55,7 @@ module Cards
       layout = LAYOUTS.fetch(@user_oshis.length)
       @user_oshis.each_with_index do |record, index|
         x = layout[:xs][index]
-        canvas = picture(canvas, @image_owners[index], x: x, width: layout[:width], height: layout[:height])
+        canvas = picture(canvas, @image_owners[index], crop: @crops[index], x: x, width: layout[:width], height: layout[:height])
         canvas = text(canvas, record.oshi.name, x: single? ? 568 : x, y: layout[:name_y],
           width: single? ? 984 : layout[:width], size: layout[:name_size], limit: layout[:limit],
           max_lines: 2, line_height: single? ? 66 : 40)
@@ -72,19 +75,39 @@ module Cards
     end
 
     private
+      # Fingerprints are checked on download without rendering again. Validate
+      # restored settings against the actual oriented image in that path too.
+      def validate_crops!
+        layout = LAYOUTS.fetch(@user_oshis.length)
+        @image_owners.each_with_index do |owner, index|
+          bytes = owner && image_bytes(owner)
+          if bytes
+            source = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error).autorot
+            Crop.geometry(image_width: source.width, image_height: source.height,
+              width: layout[:width], height: layout[:height], crop: @crops[index])
+          else
+            raise Crop::Invalid unless @crops[index] == Crop::DEFAULT
+          end
+        end
+      rescue Vips::Error
+        raise InvalidImage
+      end
+
       def single?
         @user_oshis.length == 1
       end
 
-      def picture(canvas, owner, x:, width:, height:)
+      def picture(canvas, owner, crop:, x:, width:, height:)
         bytes = image_bytes(owner) if owner
         if bytes
           source = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error).autorot.colourspace(:srgb)
-          scale = [ width.to_f / source.width, height.to_f / source.height ].max
-          resized = source.resize(scale)
-          photo = resized.crop((resized.width - width) / 2, (resized.height - height) / 2, width, height)
+          geometry = Crop.geometry(image_width: source.width, image_height: source.height, width: width, height: height, crop: crop)
+          resized = source.resize(geometry[:scale])
+          photo = resized.crop(geometry[:left], geometry[:top], width, height)
           canvas.composite(photo, :over, x: x, y: 176)
         else
+          raise Crop::Invalid unless crop == Crop::DEFAULT
+
           placeholder = Vips::Image.black(width, height, bands: 3).new_from_image([ 240, 243, 246 ]).copy(interpretation: :srgb)
           canvas = canvas.composite(placeholder, :over, x: x, y: 176)
           text(canvas, owner ? "画像未登録" : "画像を使用しない", x: x + (width - 272) / 2,
@@ -107,44 +130,7 @@ module Cards
 
         blob = attachment.blob
         return @image_bytes[blob.id] if @image_bytes.key?(blob.id)
-        raise InvalidImage unless ImageAttachmentValidator::CONTENT_TYPES.include?(blob.content_type)
-        raise InvalidImage unless blob.byte_size.positive? && blob.byte_size <= ImageAttachmentValidator::MAX_BYTE_SIZE
-
-        bytes = blob.download
-        raise InvalidImage unless bytes.bytesize == blob.byte_size && Digest::MD5.base64digest(bytes) == blob.checksum
-        validate_format!(bytes, blob.content_type)
-        image = Vips::Image.new_from_buffer(bytes, "", access: :sequential, fail_on: :error)
-        raise InvalidImage unless image.width.positive? && image.height.positive?
-        raise InvalidImage if image.get_typeof("n-pages").positive? && image.get("n-pages") != 1
-        @image_bytes[blob.id] = bytes
-      rescue ActiveStorage::FileNotFoundError, ActiveStorage::IntegrityError, Vips::Error, Errno::ENOENT
-        raise InvalidImage
-      end
-
-      def validate_format!(bytes, type)
-        case type
-        when "image/jpeg"
-          raise InvalidImage unless bytes.start_with?("\xff\xd8\xff".b)
-        when "image/png"
-          raise InvalidImage unless bytes.start_with?(PNG_SIGNATURE)
-          offset = 8
-          while offset + 12 <= bytes.bytesize
-            length = bytes.byteslice(offset, 4).unpack1("N")
-            kind = bytes.byteslice(offset + 4, 4)
-            raise InvalidImage if kind == "acTL" || offset + length + 12 > bytes.bytesize
-            offset += length + 12
-            break if kind == "IEND"
-          end
-        when "image/webp"
-          raise InvalidImage unless bytes.start_with?("RIFF") && bytes.byteslice(8, 4) == "WEBP"
-          offset = 12
-          while offset + 8 <= bytes.bytesize
-            kind = bytes.byteslice(offset, 4)
-            length = bytes.byteslice(offset + 4, 4).unpack1("V")
-            raise InvalidImage if %w[ANIM ANMF].include?(kind) || offset + length + 8 > bytes.bytesize
-            offset += 8 + length + length % 2
-          end
-        end
+        @image_bytes[blob.id] = ImageSource.read(blob)
       end
 
       def glyph_image(value, size)

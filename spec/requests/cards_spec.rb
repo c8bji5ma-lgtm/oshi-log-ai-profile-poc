@@ -1,9 +1,11 @@
 require "rails_helper"
 require "tmpdir"
 require_relative "../support/image_attachments"
+require_relative "../support/card_images"
 
 RSpec.describe "Photo cards", type: :request do
   include ImageAttachments
+  include CardImages
   include ActiveSupport::Testing::TimeHelpers
 
   let(:user) { create(:user) }
@@ -72,6 +74,199 @@ RSpec.describe "Photo cards", type: :request do
     expect(response).to have_http_status(:ok)
     expect(response.body).to include(user_oshi.oshi.name, 'name="turbo-cache-control" content="no-cache"')
     expect(response.body).not_to include(foreign.oshi.name)
+  end
+
+  it "shows all template choices with photo selected and all settings available without persisting settings" do
+    profile
+    user_oshi
+    login
+    original = profile.reload.attributes
+    expect { get new_card_path }.not_to change(Profile, :count)
+    expect(response).to have_http_status(:ok)
+    document = Nokogiri::HTML(response.body)
+    radios = document.css("input[type='radio'][name='template']")
+    expect(radios.map { |input| input["value"] }).to eq(%w[photo memories data])
+    expect(radios.select { |input| input.key?("checked") }.map { |input| input["value"] }).to eq([ "photo" ])
+    expect(document.at_css("#card-settings-photo").key?("hidden")).to be(false)
+    data = document.at_css("#card-settings-data")
+    expect(data.key?("hidden")).to be(true)
+    expect(data.text).not_to include("PNG生成は未実装")
+    expect(data.at_css("button[type='submit']").key?("disabled")).to be(true)
+    expect(data.at_css("input[name='show_introduction']")).to be_nil
+    expect(data.at_css("select#card-data-year")).to be_present
+    expect(data.at_css("select#card-data-oshi")).to be_present
+    memory = document.at_css("#card-settings-memories")
+    expect(memory.key?("hidden")).to be(true)
+    expect(memory.text).to include("活動を1〜3件")
+    expect(memory.text).not_to include("PNG生成は未実装")
+    expect(memory.at_css("input[name='show_introduction']")).to be_nil
+    expect(memory.at_css("button[type='submit']").key?("disabled")).to be(true)
+    expect(profile.reload.attributes).to eq(original)
+  end
+
+  it "shows the template selector with no registered oshis without reading activity or subscription data" do
+    profile
+    login
+    queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| queries << payload[:sql] }
+    get new_card_path
+    ActiveSupport::Notifications.unsubscribe(subscription)
+    expect(response).to have_http_status(:ok)
+    document = Nokogiri::HTML(response.body)
+    expect(document.css("input[name='template']").size).to eq(3)
+    expect(document.at_css("[data-photo-card-target='generateButton']").key?("disabled")).to be(true)
+    expect(document.at_css("a[href='#{new_oshi_path}']")).to be_present
+    expect(queries.join).not_to match(/\b(?:activities|activity_oshis|subscriptions)\b/i)
+    expect(user.user_oshis).to be_empty
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  it "accepts an explicit photo template and preserves the existing preview download contract" do
+    profile
+    login
+    generate_card(template: "photo")
+    expect(response).to have_http_status(:ok)
+    png = response.body.dup
+    receipt = response.headers.fetch("X-Card-Receipt")
+    expect(response.media_type).to eq("image/png")
+    save_card(png, receipt)
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to eq(png)
+  end
+
+  [ "unknown", nil, [ "photo" ], { name: "photo" } ].each do |template|
+    it "rejects unsupported template #{template.inspect} without rendering or persisting" do
+      profile
+      login
+      expect(Cards::Photo).not_to receive(:new)
+      counts = [ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+      generate_card(template: template)
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.media_type).to eq("application/json")
+      expect(response.parsed_body["error"]).to include("利用できません")
+      expect(response.headers["X-Card-Receipt"]).to be_nil
+      expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+    end
+  end
+
+  context "with crop settings" do
+    before do
+      profile
+      login
+    end
+
+    it "signs crops, preserves originals, reads no activity data, and downloads identical bytes" do
+      bytes = attach_coordinates(user_oshi)
+      blob = user_oshi.representative_image.blob
+      original = blob.reload.attributes
+      crop = { x: 0.25, y: 0.35, zoom: 3 }
+      queries = []
+      subscription = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| queries << payload[:sql] }
+      counts = [ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+      generate_card(crops: [ crop ])
+      ActiveSupport::Notifications.unsubscribe(subscription)
+      expect(response).to have_http_status(:ok)
+      png = response.body.dup
+      receipt = response.headers.fetch("X-Card-Receipt")
+      expect(receipt.bytesize).to be < 16.kilobytes
+      payload = Rails.application.message_verifier(CardsController::PURPOSE).verified(receipt, purpose: CardsController::PURPOSE)
+      expect(payload.fetch("settings").fetch("crops")).to eq([ crop.stringify_keys ])
+      expect(queries.join).not_to match(/\b(?:activities|activity_oshis|subscriptions)\b/i)
+      save_card(png, receipt)
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to eq(png)
+      expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+      expect(blob.reload.attributes).to eq(original)
+      expect(blob.download).to eq(bytes)
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+    end
+
+    it "rejects a crop-altered receipt, a modified PNG and an original replaced after preview" do
+      attach_coordinates(user_oshi)
+      generate_card(crops: [ { x: 0.5, y: 0.5, zoom: 3 } ])
+      expect(response).to have_http_status(:ok)
+      png = response.body.dup
+      receipt = response.headers.fetch("X-Card-Receipt")
+      verifier = Rails.application.message_verifier(CardsController::PURPOSE)
+      payload = verifier.verified(receipt, purpose: CardsController::PURPOSE)
+      payload.fetch("settings").fetch("crops").first["zoom"] = 1
+      altered_body = verifier.generate(payload, purpose: CardsController::PURPOSE).split("--").first
+      tampered = "#{altered_body}--#{receipt.split('--').last}"
+      save_card(png, tampered)
+      expect(response).to have_http_status(:unprocessable_content)
+      save_card(png.sub("PNG", "BAD"), receipt)
+      expect(response).to have_http_status(:unprocessable_content)
+      user_oshi.representative_image.attach(image_upload("image.jpg"))
+      save_card(png, receipt)
+      expect(response).to have_http_status(:conflict)
+    end
+
+    it "bounds a four-frame receipt even when the same image is cropped four different ways" do
+      records = Array.new(4) { create(:user_oshi, user: user) }
+      attach_coordinates(records.first)
+      crops = [ 0.2, 0.4, 0.6, 0.8 ].map { |x| { x: x, y: 0.5, zoom: 3 } }
+      generate_card(records.map(&:id), image_user_oshi_ids: [ records.first.id.to_s ] * 4, crops: crops)
+      expect(response).to have_http_status(:ok)
+      png = response.body.dup
+      receipt = response.headers.fetch("X-Card-Receipt")
+      expect(receipt.bytesize).to be < 16.kilobytes
+      save_card(png, receipt)
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to eq(png)
+    end
+
+    [ nil, [], {}, "crop", [ nil ], [ true ], [ [] ], [ {} ],
+      [ { x: "0.5", y: 0.5, zoom: 1 } ], [ { x: 0.5, y: false, zoom: 1 } ],
+      [ { x: 0.5, y: 0.5, zoom: "1" } ], [ { x: -0.1, y: 0.5, zoom: 1 } ],
+      [ { x: 0.5, y: 1.1, zoom: 1 } ], [ { x: 0.5, y: 0.5, zoom: 0.99 } ],
+      [ { x: 0.5, y: 0.5, zoom: 3.01 } ], [ { x: 0.5, y: 0.5, zoom: 1, url: "foreign" } ],
+      [ { x: 0.5, y: 0.5, zoom: 1 }, { x: 0.5, y: 0.5, zoom: 1 } ] ].each do |crops|
+      it "rejects malformed or extra crop settings #{crops.inspect}" do
+        generate_card(crops: crops)
+        expect(response).to have_http_status(:unprocessable_content)
+        expect(response.media_type).to eq("application/json")
+        expect(response.parsed_body["error"]).to include("調整範囲が不正")
+        expect(response.headers["X-Card-Receipt"]).to be_nil
+      end
+    end
+
+    it "rejects syntactically non-finite JSON coordinates" do
+      %w[NaN Infinity -Infinity].each do |value|
+        post card_path, params: %Q({"card":{"crops":[{"x":#{value},"y":0.5,"zoom":1}]}}), headers: { "CONTENT_TYPE" => "application/json" }
+        expect(response).to have_http_status(:bad_request)
+        expect(response.headers["X-Card-Receipt"]).to be_nil
+      end
+    end
+
+    it "rejects an in-range centre whose visible window extends outside the image" do
+      attach_coordinates(user_oshi)
+      generate_card(crops: [ { x: 0.1, y: 0.5, zoom: 1 } ])
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["error"]).to include("調整範囲が不正")
+    end
+
+    it "preserves missing and switched-off image slots with default crops only" do
+      generate_card(crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:ok)
+      generate_card(crops: [ { x: 0.5, y: 0.5, zoom: 2 } ])
+      expect(response).to have_http_status(:unprocessable_content)
+      attach_coordinates(user_oshi)
+      user_oshi.representative_image.blob.service.delete(user_oshi.representative_image.blob.key)
+      generate_card(crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["error"]).to include("未登録とは異なる")
+      generate_card(image_user_oshi_ids: [ "" ], crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "still rejects another user's source when valid crop settings are supplied" do
+      foreign = create(:user_oshi)
+      attach_coordinates(foreign)
+      generate_card(foreign.id, crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:not_found)
+    end
   end
 
   it "generates a real PNG, reads no Activity and does not persist card data" do
@@ -501,5 +696,25 @@ RSpec.describe "Photo cards", type: :request do
       record.representative_image.download ] }).to eq(before)
   ensure
     ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  [ :outside, :hidden, :absent ].each do |image_state|
+    it "revalidates the actual crop window from a signed receipt for #{image_state} images" do
+      profile
+      attach_coordinates(user_oshi) unless image_state == :absent
+      login
+      images = image_state == :hidden ? [ "" ] : [ user_oshi.id.to_s ]
+      generate_card(image_user_oshi_ids: images, crops: [ Cards::Crop::DEFAULT ])
+      expect(response).to have_http_status(:ok)
+      png = response.body.dup
+      verifier = Rails.application.message_verifier(CardsController::PURPOSE)
+      payload = verifier.verified(response.headers.fetch("X-Card-Receipt"), purpose: CardsController::PURPOSE)
+      payload["settings"]["crops"] = [ image_state == :outside ? { "x" => 0, "y" => 0.5, "zoom" => 1 } : { "x" => 0.5, "y" => 0.5, "zoom" => 2 } ]
+      receipt = verifier.generate(payload, purpose: CardsController::PURPOSE)
+      expect_any_instance_of(Cards::Photo).not_to receive(:render)
+      save_card(png, receipt)
+      expect(response).to have_http_status(:conflict)
+      expect(response.media_type).to eq("application/json")
+    end
   end
 end

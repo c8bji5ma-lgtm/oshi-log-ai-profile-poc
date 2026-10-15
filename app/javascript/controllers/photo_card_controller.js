@@ -1,20 +1,44 @@
 import { Controller } from "@hotwired/stimulus"
 
 export default class extends Controller {
-  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate"]
+  static targets = ["form", "status", "error", "preview", "image", "generateButton", "downloadButton", "oshi", "frames", "frameTemplate", "template", "panel", "settingsForm"]
   static values = { createUrl: String, downloadUrl: String }
 
   connect() {
     this.sequence = (this.sequence || 0) + 1
     this.disposed = false
     this.lastAction = Date.now()
+    this.template = "photo"
+    this.settingsFormTargets.forEach(form => {
+      form.reset()
+      form.querySelectorAll("input, select").forEach(input => { input.disabled = false })
+    })
     this.selectedIds = this.oshiTargets.filter(input => input.checked).map(input => input.value)
     this.imageSources = new Map(this.selectedIds.map(id => [id, id]))
     this.renderFrames()
+    this.renderPanels()
     this.timer = setInterval(() => this.checkExpiry(), 1000)
   }
 
   disconnect() { this.dispose() }
+
+  switchTemplate(event) {
+    if (this.disposed || !this.checkExpiry()) return
+    this.lastAction = Date.now()
+    this.template = event.target.value
+    this.invalidate()
+    this.renderPanels()
+    this.errorTarget.textContent = ""
+    this.statusTarget.textContent = this.template === "photo"
+      ? "ビジュアル重視に切り替えました。プレビューを作成してください。"
+      : "テンプレートを切り替えました。このテンプレートのPNG生成は未実装です。"
+  }
+
+  renderPanels() {
+    this.panelTargets.forEach(panel => { panel.hidden = panel.dataset.template !== this.template })
+  }
+
+  get canGenerate() { return !this.disposed && this.template === "photo" && this.selectedIds?.length > 0 }
 
   selectOshi(event) {
     if (this.disposed || !this.checkExpiry()) return
@@ -56,7 +80,7 @@ export default class extends Controller {
       return row
     })
     this.framesTarget.replaceChildren(...rows)
-    this.generateButtonTarget.disabled = this.selectedIds.length === 0
+    this.generateButtonTarget.disabled = !this.canGenerate
   }
 
   changed(event) {
@@ -66,12 +90,15 @@ export default class extends Controller {
     if (id) this.imageSources.set(id, event.target.value)
     this.invalidate()
     this.errorTarget.textContent = ""
-    this.statusTarget.textContent = "設定を変更しました。プレビューを作成してください。"
+    this.statusTarget.textContent = this.template === "photo"
+      ? "設定を変更しました。プレビューを作成してください。"
+      : "設定を変更しました。このテンプレートのPNG生成は未実装です。"
   }
 
   async generate(event) {
     event.preventDefault()
     if (this.disposed || !this.checkExpiry()) return
+    if (!this.canGenerate) return
     this.lastAction = Date.now()
     this.invalidate()
     const sequence = this.sequence
@@ -86,6 +113,7 @@ export default class extends Controller {
         method: "POST", credentials: "same-origin", signal: operation.signal,
         headers: { "Content-Type": "application/json", "X-CSRF-Token": this.csrfToken },
         body: JSON.stringify({ card: {
+          template: "photo",
           user_oshi_ids: this.selectedIds,
           image_user_oshi_ids: this.selectedIds.map(id => this.imageSources.get(id)),
           show_introduction: form.show_introduction.checked
@@ -111,12 +139,12 @@ export default class extends Controller {
         this.statusTarget.textContent = ""
       }
     } finally {
-      if (this.current(sequence)) this.generateButtonTarget.disabled = this.selectedIds.length === 0
+      if (this.current(sequence)) this.generateButtonTarget.disabled = !this.canGenerate
     }
   }
 
   async download() {
-    if (this.disposed || !this.checkExpiry() || !this.result) return
+    if (this.disposed || !this.checkExpiry() || this.template !== "photo" || !this.result) return
     this.lastAction = Date.now()
     const result = this.result
     const sequence = this.sequence
@@ -183,7 +211,7 @@ export default class extends Controller {
     this.result = null
     this.imageTarget.removeAttribute("src")
     this.previewTarget.hidden = true
-    this.generateButtonTarget.disabled = !this.selectedIds?.length
+    this.generateButtonTarget.disabled = !this.canGenerate
     this.downloadButtonTarget.disabled = true
   }
 
@@ -191,7 +219,12 @@ export default class extends Controller {
     this.disposed = true
     clearInterval(this.timer)
     this.invalidate()
-    this.formTarget.reset()
+    this.settingsFormTargets.forEach(form => {
+      form.reset()
+      for (const input of form.elements) input.disabled = true
+    })
+    this.template = "photo"
+    this.renderPanels()
     this.selectedIds = []
     this.imageSources?.clear()
     this.framesTarget.replaceChildren()

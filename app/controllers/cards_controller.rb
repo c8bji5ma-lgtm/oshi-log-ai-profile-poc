@@ -30,6 +30,8 @@ class CardsController < ApplicationController
     response.headers["X-Card-Expires-At"] = payload["expires_at"].to_s
     response.headers["X-PNG-SHA256"] = payload["png_sha256"]
     send_data png, type: "image/png", disposition: "inline"
+  rescue UnsupportedTemplate
+    render_error("このテンプレートのPNG生成は未実装です。ビジュアル重視を選択してください。", :unprocessable_content)
   rescue ActionController::BadRequest, ArgumentError
     render_error("推しを重複なく1〜4人、正しい形式で選択してください。", :unprocessable_content)
   rescue ActiveRecord::RecordNotFound
@@ -66,6 +68,7 @@ class CardsController < ApplicationController
 
   private
     class SourceChanged < StandardError; end
+    class UnsupportedTemplate < StandardError; end
 
     def private_response
       response.headers["Cache-Control"] = "private, no-store"
@@ -77,6 +80,7 @@ class CardsController < ApplicationController
     def card_settings
       input = params.require(:card)
       raise ActionController::BadRequest unless input.is_a?(ActionController::Parameters)
+      raise UnsupportedTemplate if input.key?(:template) && input[:template] != "photo"
       ids = input[:user_oshi_ids]
       raise ArgumentError unless ids.is_a?(Array) && ids.length.between?(1, 4) && ids.uniq.length == ids.length
       raise ArgumentError unless ids.all? { |id| id.is_a?(String) && id.match?(/\A[1-9][0-9]{0,18}\z/) && id.to_i <= 2**63 - 1 }

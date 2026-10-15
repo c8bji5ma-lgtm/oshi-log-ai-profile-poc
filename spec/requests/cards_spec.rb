@@ -74,6 +74,74 @@ RSpec.describe "Photo cards", type: :request do
     expect(response.body).not_to include(foreign.oshi.name)
   end
 
+  it "shows all template choices with photo selected and pending generators disabled without persisting settings" do
+    profile
+    user_oshi
+    login
+    original = profile.reload.attributes
+    expect { get new_card_path }.not_to change(Profile, :count)
+    expect(response).to have_http_status(:ok)
+    document = Nokogiri::HTML(response.body)
+    radios = document.css("input[type='radio'][name='template']")
+    expect(radios.map { |input| input["value"] }).to eq(%w[photo memories data])
+    expect(radios.select { |input| input.key?("checked") }.map { |input| input["value"] }).to eq([ "photo" ])
+    expect(document.at_css("#card-settings-photo").key?("hidden")).to be(false)
+    %w[memories data].each do |template|
+      panel = document.at_css("#card-settings-#{template}")
+      expect(panel.key?("hidden")).to be(true)
+      expect(panel.text).to include("PNG生成は未実装")
+      expect(panel.at_css("button[type='submit']").key?("disabled")).to be(true)
+      expect(panel.at_css("input[name='show_introduction']")).to be_present
+    end
+    expect(profile.reload.attributes).to eq(original)
+  end
+
+  it "shows the template selector with no registered oshis without reading activity or subscription data" do
+    profile
+    login
+    queries = []
+    subscription = ActiveSupport::Notifications.subscribe("sql.active_record") { |*, payload| queries << payload[:sql] }
+    get new_card_path
+    ActiveSupport::Notifications.unsubscribe(subscription)
+    expect(response).to have_http_status(:ok)
+    document = Nokogiri::HTML(response.body)
+    expect(document.css("input[name='template']").size).to eq(3)
+    expect(document.at_css("[data-photo-card-target='generateButton']").key?("disabled")).to be(true)
+    expect(document.at_css("a[href='#{new_oshi_path}']")).to be_present
+    expect(queries.join).not_to match(/\b(?:activities|activity_oshis|subscriptions)\b/i)
+    expect(user.user_oshis).to be_empty
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  it "accepts an explicit photo template and preserves the existing preview download contract" do
+    profile
+    login
+    generate_card(template: "photo")
+    expect(response).to have_http_status(:ok)
+    png = response.body.dup
+    receipt = response.headers.fetch("X-Card-Receipt")
+    expect(response.media_type).to eq("image/png")
+    save_card(png, receipt)
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to eq(png)
+  end
+
+  [ "memories", "data", "unknown", nil, [ "photo" ], { name: "photo" } ].each do |template|
+    it "rejects unsupported template #{template.inspect} without rendering or persisting" do
+      profile
+      login
+      expect(Cards::Photo).not_to receive(:new)
+      counts = [ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+      generate_card(template: template)
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.media_type).to eq("application/json")
+      expect(response.parsed_body["error"]).to include("PNG生成は未実装")
+      expect(response.headers["X-Card-Receipt"]).to be_nil
+      expect([ Profile.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+    end
+  end
+
   it "generates a real PNG, reads no Activity and does not persist card data" do
     profile
     user_oshi.representative_image.attach(image_upload)

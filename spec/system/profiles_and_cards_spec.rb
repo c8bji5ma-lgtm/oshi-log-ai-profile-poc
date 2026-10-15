@@ -112,6 +112,170 @@ RSpec.describe "Profiles and photo cards in the browser", type: :system do
     expect(image.height).to be_positive
   end
 
+  it "starts with photo and keeps each template's settings independently while discarding previous previews" do
+    create(:profile, user: user)
+    second = create(:user_oshi, user: user, oshi: create(:oshi, :approved, name: "設定を保持する推し"))
+    sign_in
+    open_card
+    expect(page).to have_checked_field("ビジュアル重視", exact: true)
+    expect(page).to have_css("#card-settings-photo")
+    expect(page).not_to have_css("#card-settings-memories, #card-settings-data")
+
+    # Re-select the first oshi to verify selection order as well as checkbox values.
+    check second.oshi.name, exact: true
+    uncheck user_oshi.oshi.name, exact: true
+    check user_oshi.oshi.name, exact: true
+    select "画像を表示しない", from: "1. #{second.oshi.name}の画像"
+    select "#{second.oshi.name}の代表画像", from: "2. #{user_oshi.oshi.name}の画像"
+    uncheck "保存済みの自己紹介を表示する"
+    generate_preview
+
+    choose "思い出・活動履歴重視", exact: true
+    check_invalidated_preview
+    within("#card-settings-memories") do
+      expect(page).to have_text("PNG生成は未実装")
+      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
+      uncheck "保存済みの自己紹介を表示する"
+      expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
+    end
+    choose "データ可視化重視", exact: true
+    expect(page).not_to have_css("#card-settings-photo, #card-settings-memories")
+    within("#card-settings-data") do
+      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
+      expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
+    end
+    choose "思い出・活動履歴重視", exact: true
+    within("#card-settings-memories") { expect(page).to have_unchecked_field("保存済みの自己紹介を表示する") }
+    choose "ビジュアル重視", exact: true
+    expect(page).to have_checked_field(user_oshi.oshi.name, exact: true)
+    expect(page).to have_checked_field(second.oshi.name, exact: true)
+    expect(page).to have_select("1. #{second.oshi.name}の画像", selected: "画像を表示しない")
+    expect(page).to have_select("2. #{user_oshi.oshi.name}の画像", selected: "#{second.oshi.name}の代表画像")
+    expect(page).to have_unchecked_field("保存済みの自己紹介を表示する")
+    check_invalidated_preview
+    generate_preview
+    download_png
+  end
+
+  it "never sends a generation request from pending templates, including a submitted form" do
+    create(:profile, user: user)
+    sign_in
+    open_card
+    page.execute_script(<<~JS)
+      window.cardRequests = 0;
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (...args) => { window.cardRequests += 1; return originalFetch(...args); };
+    JS
+    [ "思い出・活動履歴重視", "データ可視化重視" ].each do |name|
+      choose name, exact: true
+      within("[data-photo-card-target='panel']:not([hidden])") do
+        expect(page).to have_button("プレビューを作成（未実装）", disabled: true)
+        find("form").execute_script("this.requestSubmit()")
+      end
+      check_invalidated_preview
+      expect(page).to have_css("[role='status']", text: "PNG生成は未実装")
+      expect(page.evaluate_script("window.cardRequests")).to eq(0)
+    end
+    expect(@download_directory.children).to be_empty
+  end
+
+  it "shows and switches templates with no registered oshis" do
+    user_oshi.destroy!
+    create(:profile, user: user)
+    sign_in
+    open_my_page
+    click_link "カードを作成"
+    expect(page).to have_checked_field("ビジュアル重視", exact: true)
+    expect(page).to have_link("推しを登録")
+    expect(page).to have_button("プレビューを作成", disabled: true)
+    choose "データ可視化重視", exact: true
+    expect(page).to have_css("#card-settings-data", text: "PNG生成は未実装")
+    choose "思い出・活動履歴重視", exact: true
+    expect(page).to have_css("#card-settings-memories", text: "PNG生成は未実装")
+    choose "ビジュアル重視", exact: true
+    expect(page).to have_button("プレビューを作成", disabled: true)
+    check_invalidated_preview
+    expect(user.user_oshis).to be_empty
+  end
+
+  it "discards all template settings on navigation and restores initial settings on return" do
+    profile = create(:profile, user: user)
+    original = profile.attributes
+    sign_in
+    open_card
+    select "画像を表示しない", from: "1. #{user_oshi.oshi.name}の画像"
+    uncheck "保存済みの自己紹介を表示する"
+    generate_preview
+    choose "思い出・活動履歴重視", exact: true
+    uncheck "保存済みの自己紹介を表示する"
+    choose "データ可視化重視", exact: true
+    uncheck "保存済みの自己紹介を表示する"
+    open_card
+    expect(page).to have_checked_field("ビジュアル重視", exact: true)
+    expect(page).to have_checked_field("保存済みの自己紹介を表示する")
+    check_invalidated_preview
+    [ "思い出・活動履歴重視", "データ可視化重視" ].each do |name|
+      choose name, exact: true
+      expect(page).to have_checked_field("保存済みの自己紹介を表示する")
+    end
+    expect(profile.reload.attributes).to eq(original)
+  end
+
+  it "expires a photo preview after fifteen minutes and permits regenerating it" do
+    create(:profile, user: user)
+    sign_in
+    open_card
+    generate_preview
+    page.execute_script("window.cardOriginalNow = Date.now; Date.now = () => window.cardOriginalNow() + 15 * 60 * 1000;")
+    expect(page).to have_css("[role='status']", text: "プレビューの期限が切れました。再生成してください。", wait: 5)
+    check_invalidated_preview
+    expect(page).to have_button("プレビューを作成", disabled: false)
+    page.execute_script("Date.now = window.cardOriginalNow; delete window.cardOriginalNow;")
+    generate_preview
+  end
+
+  it "discards every template's settings and preview after thirty minutes of inactivity" do
+    create(:profile, user: user)
+    sign_in
+    open_card
+    uncheck "保存済みの自己紹介を表示する"
+    generate_preview
+    choose "思い出・活動履歴重視", exact: true
+    uncheck "保存済みの自己紹介を表示する"
+    choose "データ可視化重視", exact: true
+    uncheck "保存済みの自己紹介を表示する"
+    page.execute_script("const originalNow = Date.now; Date.now = () => originalNow() + 30 * 60 * 1000;")
+    expect(page).to have_css("[role='status']", text: "30分間操作がなかったため破棄しました。ページを開き直してください。", wait: 5)
+    check_invalidated_preview
+    expect(page).to have_checked_field("ビジュアル重視", disabled: true, exact: true)
+    expect(page).to have_button("プレビューを作成", disabled: true)
+    expect(page).not_to have_css("[data-frame-source]", visible: :all)
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:checked?)).to eq([ true, true, true ])
+    expect(page.all("input[name='show_introduction']", visible: :all).map(&:disabled?)).to eq([ true, true, true ])
+    open_card
+    expect(page).to have_checked_field("ビジュアル重視", disabled: false, exact: true)
+    expect(page).to have_button("プレビューを作成", disabled: false)
+  end
+
+  it "supports native keyboard template selection without horizontal overflow on a narrow screen" do
+    create(:profile, user: user)
+    page.current_window.resize_to(375, 900)
+    sign_in
+    open_card
+    find("input[name='template'][value='photo']").send_keys(:arrow_right)
+    expect(page).to have_checked_field("思い出・活動履歴重視", exact: true)
+    expect(page).to have_css("#card-settings-memories")
+    find("input[name='template'][value='memories']").send_keys(:arrow_right)
+    expect(page).to have_checked_field("データ可視化重視", exact: true)
+    expect(page).to have_css("#card-settings-data")
+    expect(page.evaluate_script("document.documentElement.scrollWidth <= window.innerWidth")).to be(true)
+    page.all(".card-template-choice").each do |choice|
+      expect(choice.rect.height).to be >= 44
+    end
+  ensure
+    page.current_window.resize_to(1280, 1024)
+  end
+
   it "saves profile text and images, generates cards for one to four oshis and downloads the PNG" do
     others = (2..4).map do |index|
       create(:user_oshi, user: user, oshi: create(:oshi, :approved, name: "カードの推し#{index}"))

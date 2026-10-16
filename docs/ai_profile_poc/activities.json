@@ -1,0 +1,42 @@
+{
+  "owner_id": "fictional-user",
+  "notice": "全件架空。人物を含まない図形ダミー画像のみを使用。",
+  "activities": [
+    {
+      "id": "activity-live",
+      "owner_id": "fictional-user",
+      "occurred_on": "2026-09-12",
+      "title": "星あかりツアーの初日",
+      "oshi_names": [
+        "星野ルカ（架空）"
+      ],
+      "image_ids": [
+        "photo-live"
+      ]
+    },
+    {
+      "id": "activity-record",
+      "owner_id": "fictional-user",
+      "occurred_on": "2026-09-20",
+      "title": "新しいアルバムを聴いた夜",
+      "oshi_names": [
+        "星野ルカ（架空）"
+      ],
+      "image_ids": [
+        "photo-record"
+      ]
+    },
+    {
+      "id": "activity-goods",
+      "owner_id": "fictional-user",
+      "occurred_on": "2026-10-03",
+      "title": "週末のグッズ開封会",
+      "oshi_names": [
+        "星野ルカ（架空）"
+      ],
+      "image_ids": [
+        "photo-goods"
+      ]
+    }
+  ]
+}

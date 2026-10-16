@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "style": "scrapbook",
+  "background": "#E4D5BB",
+  "elements": [
+    {
+      "type": "rect",
+      "x": 32,
+      "y": 28,
+      "width": 1136,
+      "height": 1444,
+      "color": "#F4EBD9"
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 64,
+      "width": 1060,
+      "height": 64,
+      "activity_id": "activity-live",
+      "field": "oshi_names",
+      "size": 52,
+      "color": "#614444"
+    },
+    {
+      "type": "rect",
+      "x": 62,
+      "y": 180,
+      "width": 654,
+      "height": 650,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "image",
+      "x": 86,
+      "y": 204,
+      "width": 606,
+      "height": 440,
+      "activity_id": "activity-live",
+      "image_id": "photo-live",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "text",
+      "x": 94,
+      "y": 682,
+      "width": 590,
+      "height": 48,
+      "activity_id": "activity-live",
+      "field": "title",
+      "size": 36,
+      "color": "#614444"
+    },
+    {
+      "type": "text",
+      "x": 94,
+      "y": 748,
+      "width": 590,
+      "height": 34,
+      "activity_id": "activity-live",
+      "field": "occurred_on",
+      "size": 22,
+      "color": "#97796B"
+    },
+    {
+      "type": "rect",
+      "x": 250,
+      "y": 164,
+      "width": 240,
+      "height": 32,
+      "color": "#D99FB6"
+    },
+    {
+      "type": "rect",
+      "x": 758,
+      "y": 254,
+      "width": 370,
+      "height": 480,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "image",
+      "x": 778,
+      "y": 274,
+      "width": 330,
+      "height": 270,
+      "activity_id": "activity-record",
+      "image_id": "photo-record",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "text",
+      "x": 780,
+      "y": 576,
+      "width": 326,
+      "height": 38,
+      "activity_id": "activity-record",
+      "field": "title",
+      "size": 26,
+      "color": "#614444"
+    },
+    {
+      "type": "text",
+      "x": 780,
+      "y": 640,
+      "width": 326,
+      "height": 32,
+      "activity_id": "activity-record",
+      "field": "occurred_on",
+      "size": 20,
+      "color": "#97796B"
+    },
+    {
+      "type": "rect",
+      "x": 820,
+      "y": 238,
+      "width": 180,
+      "height": 30,
+      "color": "#ADC7B4"
+    },
+    {
+      "type": "rect",
+      "x": 270,
+      "y": 900,
+      "width": 814,
+      "height": 502,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "image",
+      "x": 294,
+      "y": 924,
+      "width": 766,
+      "height": 326,
+      "activity_id": "activity-goods",
+      "image_id": "photo-goods",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "text",
+      "x": 310,
+      "y": 1280,
+      "width": 730,
+      "height": 44,
+      "activity_id": "activity-goods",
+      "field": "title",
+      "size": 32,
+      "color": "#614444"
+    },
+    {
+      "type": "text",
+      "x": 310,
+      "y": 1336,
+      "width": 730,
+      "height": 32,
+      "activity_id": "activity-goods",
+      "field": "occurred_on",
+      "size": 20,
+      "color": "#97796B"
+    },
+    {
+      "type": "rect",
+      "x": 502,
+      "y": 884,
+      "width": 270,
+      "height": 32,
+      "color": "#E6BD72"
+    },
+    {
+      "type": "rect",
+      "x": 76,
+      "y": 920,
+      "width": 110,
+      "height": 110,
+      "color": "#D99FB6"
+    },
+    {
+      "type": "rect",
+      "x": 120,
+      "y": 1080,
+      "width": 96,
+      "height": 36,
+      "color": "#ADC7B4"
+    }
+  ]
+}

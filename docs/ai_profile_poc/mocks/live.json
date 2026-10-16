@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "style": "live",
+  "background": "#17112B",
+  "elements": [
+    {
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "width": 18,
+      "height": 1500,
+      "color": "#F35AB6"
+    },
+    {
+      "type": "rect",
+      "x": 950,
+      "y": 40,
+      "width": 178,
+      "height": 16,
+      "color": "#B9F578"
+    },
+    {
+      "type": "text",
+      "x": 72,
+      "y": 60,
+      "width": 1056,
+      "height": 68,
+      "activity_id": "activity-live",
+      "field": "oshi_names",
+      "size": 56,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "image",
+      "x": 72,
+      "y": 170,
+      "width": 1056,
+      "height": 570,
+      "activity_id": "activity-live",
+      "image_id": "photo-live",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "rect",
+      "x": 72,
+      "y": 764,
+      "width": 84,
+      "height": 8,
+      "color": "#B9F578"
+    },
+    {
+      "type": "text",
+      "x": 72,
+      "y": 800,
+      "width": 1056,
+      "height": 60,
+      "activity_id": "activity-live",
+      "field": "title",
+      "size": 48,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "text",
+      "x": 72,
+      "y": 870,
+      "width": 1056,
+      "height": 36,
+      "activity_id": "activity-live",
+      "field": "occurred_on",
+      "size": 24,
+      "color": "#D8C9E8"
+    },
+    {
+      "type": "image",
+      "x": 72,
+      "y": 960,
+      "width": 512,
+      "height": 300,
+      "activity_id": "activity-record",
+      "image_id": "photo-record",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "image",
+      "x": 616,
+      "y": 960,
+      "width": 512,
+      "height": 300,
+      "activity_id": "activity-goods",
+      "image_id": "photo-goods",
+      "crop": {
+        "x": 0.5,
+        "y": 0.5,
+        "zoom": 1
+      }
+    },
+    {
+      "type": "text",
+      "x": 72,
+      "y": 1290,
+      "width": 512,
+      "height": 40,
+      "activity_id": "activity-record",
+      "field": "title",
+      "size": 28,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "text",
+      "x": 616,
+      "y": 1290,
+      "width": 512,
+      "height": 40,
+      "activity_id": "activity-goods",
+      "field": "title",
+      "size": 28,
+      "color": "#FFFFFF"
+    },
+    {
+      "type": "text",
+      "x": 72,
+      "y": 1346,
+      "width": 512,
+      "height": 32,
+      "activity_id": "activity-record",
+      "field": "occurred_on",
+      "size": 20,
+      "color": "#D8C9E8"
+    },
+    {
+      "type": "text",
+      "x": 616,
+      "y": 1346,
+      "width": 512,
+      "height": 32,
+      "activity_id": "activity-goods",
+      "field": "occurred_on",
+      "size": 20,
+      "color": "#D8C9E8"
+    },
+    {
+      "type": "rect",
+      "x": 72,
+      "y": 1430,
+      "width": 1056,
+      "height": 3,
+      "color": "#F35AB6"
+    }
+  ]
+}

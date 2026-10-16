@@ -1,6 +1,7 @@
 class ActivitiesController < ApplicationController
   before_action :set_activity, only: [ :show, :edit, :update, :destroy ]
   before_action :set_selectable_oshis, only: [ :index, :new, :create, :edit, :update ]
+  before_action :set_selectable_emotions, only: [ :new, :create, :edit, :update ]
 
   def index
     @filters = {}
@@ -45,13 +46,14 @@ class ActivitiesController < ApplicationController
       pattern = "%#{Activity.sanitize_sql_like(@filters['q'])}%"
       scope = scope.where("activities.title ILIKE :query OR activities.place ILIKE :query OR activities.memo ILIKE :query", query: pattern)
     end
-    @activities = (@filter_errors.empty? ? scope : scope.none).order(occurred_on: :desc, created_at: :desc, id: :desc)
+    @activities = (@filter_errors.empty? ? scope : scope.none).includes(:emotions).order(occurred_on: :desc, created_at: :desc, id: :desc)
     render :index, status: :bad_request if @filter_errors.any?
   end
 
   def new
     @activity = current_user.activities.new
     @selected_oshi_ids = []
+    @selected_emotion_ids = []
     @existing_images = []
   end
 
@@ -71,6 +73,7 @@ class ActivitiesController < ApplicationController
 
   def edit
     @selected_oshi_ids = @activity.oshi_ids
+    @selected_emotion_ids = @activity.emotion_ids
   end
 
   def update
@@ -101,6 +104,10 @@ class ActivitiesController < ApplicationController
       @selectable_oshis = current_user.oshis.order(:name, :id).to_a
     end
 
+    def set_selectable_emotions
+      @selectable_emotions = Emotion.ordered.to_a
+    end
+
     def positive_id(value)
       value.to_i if value.is_a?(String) && value.match?(/\A[1-9][0-9]*\z/)
     end
@@ -113,18 +120,25 @@ class ActivitiesController < ApplicationController
       @selected_oshi_ids = []
       ids_valid = raw_ids.is_a?(Array) && raw_ids.all? { |id| id == "" || positive_id(id) }
       @selected_oshi_ids = raw_ids.reject { |id| id == "" }.map { |id| positive_id(id) }.uniq if ids_valid
+      raw_emotion_ids = input.fetch(:emotion_ids, @activity.emotion_ids.map(&:to_s))
+      emotions_valid = raw_emotion_ids.is_a?(Array) && raw_emotion_ids.all? { |id| id == "" || positive_id(id) }
+      @selected_emotion_ids = emotions_valid ? raw_emotion_ids.reject { |id| id == "" }.map { |id| positive_id(id) }.uniq : []
+      emotions_valid &&= (@selected_emotion_ids - @selectable_emotions.map(&:id)).empty?
       uploads = input[:images] || []
       images_valid = uploads.is_a?(Array) && uploads.all? { |image| image == "" || image.is_a?(ActionDispatch::Http::UploadedFile) }
       allowed = @selectable_oshis.map(&:id)
       selection_valid = ids_valid && (@selected_oshi_ids - allowed).empty?
-      if !selection_valid || @selected_oshi_ids.empty? || !images_valid
+      if !selection_valid || @selected_oshi_ids.empty? || !images_valid || !emotions_valid
         @activity.assign_attributes(attributes)
         @activity.errors.add(:base, "登録済みの推しを正しい形式で選択してください。") unless selection_valid
         @activity.errors.add(:base, "推しを1件以上選択してください") if ids_valid && @selected_oshi_ids.empty?
         @activity.errors.add(:images, "はファイルとして選択してください。") unless images_valid
+        @activity.errors.add(:emotion_ids, "は候補から正しい形式で選択してください。") unless emotions_valid
         return false
       end
-      Activities::Save.call(activity: @activity, attributes: attributes, oshi_ids: @selected_oshi_ids, new_images: uploads.reject { |image| image == "" })
+      Activities::Save.call(activity: @activity, attributes: attributes, oshi_ids: @selected_oshi_ids,
+        emotion_ids: input.key?(:emotion_ids) ? @selected_emotion_ids : nil,
+        new_images: uploads.reject { |image| image == "" })
       true
     rescue ActiveRecord::RecordInvalid
       false

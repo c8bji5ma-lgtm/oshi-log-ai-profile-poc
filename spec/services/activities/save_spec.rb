@@ -183,6 +183,82 @@ RSpec.describe Activities::Save do
       expect(lock_index).to be < update_index
     end
   end
+
+  describe "emotion tags" do
+    let(:happy) { Emotion.find_by!(name: "嬉しい") }
+    let(:moved) { Emotion.find_by!(name: "感動") }
+
+    it "saves new activities with multiple deduplicated tags or no tags" do
+      activity = build(:activity)
+      described_class.call(activity: activity, emotion_ids: [ happy.id, moved.id.to_s, happy.id.to_s ])
+      expect(activity.reload.emotions).to eq([ happy, moved ])
+      expect(activity.activity_emotions.count).to eq(2)
+      untagged = build(:activity)
+      described_class.call(activity: untagged, emotion_ids: [])
+      expect(untagged.reload.emotions).to be_empty
+    end
+
+    it "preserves omitted tags, replaces explicit selections and permits clearing all tags" do
+      activity = create(:activity, emotions: [ happy ])
+      link_id = activity.activity_emotions.first.id
+      described_class.call(activity: activity, attributes: { title: "本文変更" })
+      expect(activity.reload.emotions).to eq([ happy ])
+      expect(activity.activity_emotions.first.id).to eq(link_id)
+      described_class.call(activity: activity, emotion_ids: [ moved.id ])
+      expect(activity.reload.emotions).to eq([ moved ])
+      described_class.call(activity: activity, emotion_ids: [])
+      expect(activity.reload.emotions).to be_empty
+    end
+
+    it "rolls back new tags, oshis and the parent for an invalid image" do
+      activity = build(:activity)
+      counts = [ Activity.count, ActivityOshi.count, ActivityEmotion.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]
+      expect do
+        described_class.call(activity: activity, emotion_ids: [ happy.id ], new_images: [ image_upload("invalid.txt") ])
+      end.to raise_error(ActiveRecord::RecordInvalid)
+      expect([ Activity.count, ActivityOshi.count, ActivityEmotion.count, ActiveStorage::Blob.count, ActiveStorage::Attachment.count ]).to eq(counts)
+    end
+
+    it "rolls back tag additions and removals with invalid scalars, oshis or images" do
+      activity = create(:activity, emotions: [ happy ])
+      original = activity.attributes
+      original_oshi_ids = activity.oshi_ids
+      [ { attributes: { title: "" } }, { oshi_ids: [] }, { new_images: [ image_upload("invalid.txt") ] } ].each do |invalid|
+        expect do
+          described_class.call(activity: activity, emotion_ids: [ moved.id ], **invalid)
+        end.to raise_error(ActiveRecord::RecordInvalid)
+        expect(activity.reload.attributes).to eq(original)
+        expect(activity.emotions).to eq([ happy ])
+        expect(activity.oshi_ids).to eq(original_oshi_ids)
+      end
+    end
+
+    it "rolls back tags when a later oshi removal fails" do
+      activity = create(:activity, emotions: [ happy ])
+      replacement = create(:oshi)
+      original = activity.attributes
+      original_oshi_ids = activity.oshi_ids
+      allow(activity).to receive(:save!).and_wrap_original do |method|
+        method.call
+        allow(activity.activity_oshis).to receive(:where).and_raise(ActiveRecord::RecordNotDestroyed)
+      end
+      expect do
+        described_class.call(activity: activity, attributes: { title: "失敗" }, oshi_ids: [ replacement.id ], emotion_ids: [])
+      end.to raise_error(ActiveRecord::RecordNotDestroyed)
+      expect(activity.reload.attributes).to eq(original)
+      expect(activity.emotions).to eq([ happy ])
+      expect(activity.oshi_ids).to eq(original_oshi_ids)
+    end
+
+    it "does not reuse a stale tag association when replacing tags" do
+      activity = create(:activity, emotions: [ happy ])
+      activity.emotions.load
+      Activity.find(activity.id).emotions << moved
+      described_class.call(activity: activity, emotion_ids: [ happy.id ])
+      expect(activity.reload.emotions).to eq([ happy ])
+    end
+  end
+
   describe "appending new images" do
     let(:activity) { create(:activity) }
 

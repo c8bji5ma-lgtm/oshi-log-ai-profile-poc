@@ -4,7 +4,8 @@ module Activities
     # Omitted oshi_ids preserves existing links; [] explicitly requests no links.
     # new_images appends uploads under the parent lock; omitted or empty retains images.
     # Returns the saved Activity; failures raise and roll back all database changes.
-    def self.call(activity:, attributes: {}, oshi_ids: nil, new_images: [])
+    # Omitted emotion_ids preserves tags; [] clears them within the same transaction.
+    def self.call(activity:, attributes: {}, oshi_ids: nil, emotion_ids: nil, new_images: [])
       Activity.transaction do
         activity.lock! if activity.persisted?
         activity.activity_oshis.reload if activity.persisted?
@@ -16,6 +17,9 @@ module Activities
         end
 
         activity.assign_attributes(attributes)
+        unless emotion_ids.nil?
+          activity.emotion_ids = emotion_ids.map { |id| Emotion.type_for_attribute("id").cast(id) }.uniq
+        end
         uploads = Array(new_images).compact_blank
         activity.images = activity.images.blobs.to_a + uploads if uploads.any?
         if ids.empty?

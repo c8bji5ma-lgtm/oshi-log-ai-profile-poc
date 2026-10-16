@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_05_093431) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_16_020000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -55,6 +55,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_05_093431) do
     t.index ["user_id", "occurred_on"], name: "index_activities_on_user_id_and_occurred_on"
   end
 
+  create_table "activity_emotions", force: :cascade do |t|
+    t.bigint "activity_id", null: false
+    t.bigint "emotion_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["activity_id", "emotion_id"], name: "index_activity_emotions_on_activity_id_and_emotion_id", unique: true
+    t.index ["activity_id"], name: "index_activity_emotions_on_activity_id"
+    t.index ["emotion_id"], name: "index_activity_emotions_on_emotion_id"
+  end
+
   create_table "activity_oshis", force: :cascade do |t|
     t.bigint "activity_id", null: false
     t.bigint "oshi_id", null: false
@@ -63,6 +73,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_05_093431) do
     t.index ["activity_id", "oshi_id"], name: "index_activity_oshis_on_activity_id_and_oshi_id", unique: true
     t.index ["activity_id"], name: "index_activity_oshis_on_activity_id"
     t.index ["oshi_id"], name: "index_activity_oshis_on_oshi_id"
+  end
+
+  create_table "emotions", force: :cascade do |t|
+    t.string "name", null: false
+    t.integer "position", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["name"], name: "index_emotions_on_name", unique: true
   end
 
   create_table "oshi_aliases", force: :cascade do |t|
@@ -142,6 +160,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_05_093431) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "activities", "users"
+  add_foreign_key "activity_emotions", "activities"
+  add_foreign_key "activity_emotions", "emotions"
   add_foreign_key "activity_oshis", "activities"
   add_foreign_key "activity_oshis", "oshis"
   add_foreign_key "oshi_aliases", "oshis"

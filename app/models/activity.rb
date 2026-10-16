@@ -6,6 +6,8 @@ class Activity < ApplicationRecord
   belongs_to :user
   has_many :activity_oshis, inverse_of: :activity, autosave: true
   has_many :oshis, through: :activity_oshis
+  has_many :activity_emotions, inverse_of: :activity, dependent: :destroy
+  has_many :emotions, -> { ordered }, through: :activity_emotions
 
   has_many_attached :images
   validates :images, image_attachment: true

@@ -31,6 +31,11 @@
     </div>
   </div>
   <div class="form-field">
+    <%= f.label :emotion_ids, "感情タグ（任意・複数選択可）" %>
+    <%= f.select :emotion_ids, options_from_collection_for_select(@selectable_emotions, :id, :name, @selected_emotion_ids), {}, multiple: true, size: 7, aria: { describedby: "emotion-selection-help", invalid: @activity.errors[:emotion_ids].any? } %>
+    <p id="emotion-selection-help">未選択でも記録できます。パソコンではCtrlキー（MacではCommandキー）を押しながら選択・解除してください。</p>
+  </div>
+  <div class="form-field">
     <%= f.label :memo, "メモ" %>
     <%= f.text_area :memo, rows: 5, aria: { invalid: @activity.errors[:memo].any? } %>
   </div>

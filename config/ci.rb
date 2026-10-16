@@ -4,6 +4,7 @@ CI.run do
   step "Dependencies", "bundle check"
   step "Test database", "env RAILS_ENV=test bin/rails db:create"
   step "Test migrations", "env RAILS_ENV=test bin/rails db:migrate"
+  step "Test master data", "env RAILS_ENV=test bin/rails db:seed"
 
   step "Style: Ruby", "bin/rubocop"
 

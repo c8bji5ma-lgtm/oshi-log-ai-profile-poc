@@ -1,6 +1,8 @@
 require "rails_helper"
 
 RSpec.describe Emotion, type: :model do
+  include_context "emotion master data"
+
   it "provides the seven initial candidates in display order" do
     expect(described_class.ordered.pluck(:name)).to eq(%w[嬉しい 興奮 驚き 感動 幸せ 悔しい 寂しい])
   end
@@ -20,6 +22,18 @@ RSpec.describe Emotion, type: :model do
     activity = create(:activity, emotions: [ emotion ])
     expect(emotion.activities).to contain_exactly(activity)
     expect(emotion.destroy).to be(false)
+    expect(activity.reload.emotions).to contain_exactly(emotion)
+  end
+
+  it "keeps existing activity links and master attributes unchanged when reseeded" do
+    emotion = described_class.find_by!(name: "嬉しい")
+    activity = create(:activity, emotions: [ emotion ])
+    original = emotion.attributes
+    link = activity.activity_emotions.sole
+    original_link = link.attributes
+    2.times { described_class.seed_defaults! }
+    expect(emotion.reload.attributes).to eq(original)
+    expect(link.reload.attributes).to eq(original_link)
     expect(activity.reload.emotions).to contain_exactly(emotion)
   end
 

@@ -1,6 +1,8 @@
 require "rails_helper"
 
 RSpec.describe "Activity emotion selection", type: :system do
+  include_context "emotion master data"
+
   it "registers, edits and clears multiple tags through the activity form" do
     user = create(:user)
     registration = create(:user_oshi, user: user)

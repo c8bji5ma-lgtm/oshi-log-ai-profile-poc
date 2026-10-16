@@ -185,6 +185,8 @@ RSpec.describe Activities::Save do
   end
 
   describe "emotion tags" do
+    include_context "emotion master data"
+
     let(:happy) { Emotion.find_by!(name: "嬉しい") }
     let(:moved) { Emotion.find_by!(name: "感動") }
 

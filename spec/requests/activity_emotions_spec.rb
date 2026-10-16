@@ -1,6 +1,8 @@
 require "rails_helper"
 
 RSpec.describe "Activity emotion tags", type: :request do
+  include_context "emotion master data"
+
   let(:user) { create(:user) }
   let(:oshi) { create(:oshi, :approved) }
   let(:happy) { Emotion.find_by!(name: "嬉しい") }

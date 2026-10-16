@@ -1,6 +1,8 @@
 require "rails_helper"
 
 RSpec.describe "Activity emotion compatibility" do
+  include_context "emotion master data"
+
   it "preserves activity aggregates and generated memory/data card pixels when tags change" do
     user = create(:user)
     create(:profile, user: user)
@@ -14,6 +16,7 @@ RSpec.describe "Activity emotion compatibility" do
 
     [ Emotion.where(name: %w[嬉しい 感動]).ids, [] ].each do |ids|
       Activities::Save.call(activity: activity, emotion_ids: ids)
+      expect(activity.reload.emotion_ids).to match_array(ids)
       summary = OshiData::Summary.new(user: user)
       expect(summary.activity_count).to eq(1)
       expect(summary.activity_amount).to eq(1200)

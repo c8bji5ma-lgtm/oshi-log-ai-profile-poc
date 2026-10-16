@@ -102,6 +102,9 @@ jobs:
       - name: Apply test database migrations
         run: bin/rails db:migrate
 
+      - name: Prepare test master data
+        run: bin/rails db:seed
+
       - name: Set up Chrome and ChromeDriver
         id: chrome
         uses: browser-actions/setup-chrome@v2

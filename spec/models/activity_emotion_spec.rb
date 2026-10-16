@@ -1,6 +1,8 @@
 require "rails_helper"
 
 RSpec.describe ActivityEmotion, type: :model do
+  include_context "emotion master data"
+
   let(:emotion) { Emotion.find_by!(name: "嬉しい") }
   let(:activity) { create(:activity) }
 
